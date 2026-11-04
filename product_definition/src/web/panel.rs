@@ -1,16 +1,22 @@
-//! `/factory/definitions`: product definitions with their immutable formula
-//! and routing revisions, mirroring Bilimbi `ProductDefinition.Web.DefinitionsLive`.
-use super::shared::{self as s, Notice, PageView, Result};
+//! Factory's panel on the Core product page: the product's manufacturing
+//! definition and its immutable formula and routing revisions (Bilimbi
+//! `ProductDefinition.Web.DefinitionsLive`, scoped to one Core product).
+use super::shared::{self as s, Notice, Result};
 use super::Pages;
-use crate::{contributions::MANAGE, FormulaRevision, NewProduct, Product, RoutingRevision};
+use crate::{contributions::MANAGE, Definition, FormulaRevision, NewDefinition, RoutingRevision};
 use askama::Template;
 use bilibi_factory_inventory::Item;
 use bilibi_tenancy::Scope;
-use bilibi_ui::{Button, Card, Choice, FlexRow, Html, InputKind, ListColumns, RowMode};
+use bilibi_ui::{
+    Alert, Card, Choice, EmptyState, FlexRow, Html, InputKind, ListColumns, RowMode, StatusKind,
+};
 use serde_json::{json, Value};
 
 const DENIED: &str = "You do not have permission to manage definitions.";
 const PRODUCT: &str = "product";
+/// The root element the Core product page gives this embed: `product-panel-` and
+/// the contribution ID (`factory/product_definition.product`) with `.` and `/` as `-`.
+const PANEL: &str = "product-panel-factory-product_definition-product";
 const FORMULA: &str = "formula";
 const ROUTING: &str = "routing";
 
@@ -26,34 +32,35 @@ struct Block<'a> {
 
 #[derive(Clone, Default)]
 struct Draft {
-    values: [String; 3],
+    values: [String; 2],
 }
 
-pub(super) struct Definitions {
+pub(super) struct ProductPanel {
     pages: Pages,
-    products_columns: ListColumns,
+    product_id: i64,
     formulas_columns: ListColumns,
     routings_columns: ListColumns,
-    products: Vec<Product>,
+    definition: Option<Definition>,
+    item: Option<Item>,
     items: Vec<Item>,
-    selected: Option<i64>,
     formulas: Vec<FormulaRevision>,
     routings: Vec<RoutingRevision>,
-    product_draft: Draft,
+    definition_draft: String,
     formula_draft: Draft,
     routing_draft: Draft,
     can_manage: bool,
     notice: Notice,
+    saved: Option<&'static str>,
 }
 
 fn blank_publish() -> Draft {
     Draft {
-        values: ["[]".into(), "{}".into(), String::new()],
+        values: ["[]".into(), "{}".into()],
     }
 }
 
-impl Definitions {
-    pub(super) fn new(pages: &Pages) -> Result<Self> {
+impl ProductPanel {
+    pub(super) fn new(pages: &Pages, product_id: i64) -> Result<Self> {
         let revisions = |id: &str, body: &str| {
             s::mount_columns(
                 id,
@@ -66,74 +73,74 @@ impl Definitions {
         };
         Ok(Self {
             pages: pages.clone(),
-            products_columns: s::mount_columns(
-                "product-definitions-table",
-                vec![s::column("code", "Code"), s::column("name", "Name")],
-            )?,
+            product_id,
             formulas_columns: revisions("formula-revisions-table", "Lines")?,
             routings_columns: revisions("routing-revisions-table", "Operations")?,
-            products: Vec::new(),
+            definition: None,
+            item: None,
             items: Vec::new(),
-            selected: None,
             formulas: Vec::new(),
             routings: Vec::new(),
-            product_draft: Draft::default(),
+            definition_draft: String::new(),
             formula_draft: blank_publish(),
             routing_draft: blank_publish(),
             can_manage: false,
             notice: Notice::default(),
+            saved: None,
         })
-    }
-
-    fn selected(&self) -> Option<&Product> {
-        self.products.iter().find(|p| Some(p.id) == self.selected)
     }
 
     async fn load(&mut self, scope: &Scope) -> Result<()> {
         self.can_manage = s::can(&self.pages.db, scope, MANAGE).await?;
-        self.products = Vec::new();
+        self.definition = None;
+        self.item = None;
         self.items = Vec::new();
+        self.formulas = Vec::new();
+        self.routings = Vec::new();
         let Some(company) = s::company(scope) else {
             self.notice.fail("Company not found");
             return Ok(());
         };
-        let products = self
-            .pages
-            .definitions
-            .list_products(scope, company, None)
-            .await;
-        let items = self
-            .pages
-            .inventory
-            .list_items(scope, company, None, Some(500))
-            .await
-            .map_err(crate::Error::from);
-        match (s::refusal(products)?, s::refusal(items)?) {
-            (Ok(products), Ok(items)) => {
-                self.products = products;
-                self.items = items;
+        let facade = &self.pages.definitions;
+        match facade.get_definition(scope, company, self.product_id).await {
+            Ok(definition) => self.definition = Some(definition),
+            // No definition yet is the ordinary state of a product Factory does not make.
+            Err(crate::Error::DefinitionNotFound) => {}
+            Err(error) => {
+                if let Err(message) = s::refusal::<()>(Err(error))? {
+                    self.notice.fail(message);
+                }
+                return Ok(());
             }
-            (Err(message), _) | (_, Err(message)) => self.notice.fail(message),
         }
-        self.products_columns
-            .load(&self.products, |p| p.id.to_string());
-        self.select(scope, self.selected).await
-    }
-
-    /// Reads the selected product's revisions; an unknown selection clears.
-    async fn select(&mut self, scope: &Scope, id: Option<i64>) -> Result<()> {
-        self.selected = id.filter(|id| self.products.iter().any(|p| p.id == *id));
-        self.formulas = Vec::new();
-        self.routings = Vec::new();
-        let (Some(product), Some(company)) = (self.selected, s::company(scope)) else {
+        let Some(definition) = self.definition.clone() else {
+            if self.can_manage {
+                let items = self
+                    .pages
+                    .inventory
+                    .list_items(scope, company, None, Some(500))
+                    .await
+                    .map_err(crate::Error::from);
+                match s::refusal(items)? {
+                    Ok(items) => self.items = items,
+                    Err(message) => self.notice.fail(message),
+                }
+            }
             return Ok(());
         };
-        let facade = &self.pages.definitions;
+        let item = self
+            .pages
+            .inventory
+            .get_item(scope, company, definition.item_id)
+            .await
+            .map_err(crate::Error::from);
+        // The output item is a label for the person; its refusal never hides the revisions.
+        self.item = s::refusal(item)?.ok();
         let formulas = facade
-            .list_formula_revisions(scope, company, product, None)
+            .list_formula_revisions(scope, company, self.product_id, None)
             .await;
         let routings = facade
-            .list_routing_revisions(scope, company, product, None)
+            .list_routing_revisions(scope, company, self.product_id, None)
             .await;
         match (s::refusal(formulas)?, s::refusal(routings)?) {
             (Ok(formulas), Ok(routings)) => {
@@ -143,7 +150,6 @@ impl Definitions {
                     .load(&self.formulas, |f| f.version.to_string());
                 self.routings_columns
                     .load(&self.routings, |r| r.version.to_string());
-                self.notice.error = None;
             }
             (Err(message), _) | (_, Err(message)) => self.notice.fail(message),
         }
@@ -156,14 +162,12 @@ impl Definitions {
 
     pub(super) async fn event(&mut self, scope: &Scope, payload: &Value) -> Result<()> {
         self.notice.begin();
+        self.notice.error = None;
+        self.saved = None;
         let kind = s::text(payload, "type").ok_or(bilibi_database::Error::Invalid)?;
         match kind {
             "clear-flash" => return Ok(()),
             // Each table raises its own event, so its columns are the ones touched.
-            "grid_products" => {
-                s::grid(&mut self.products_columns, payload);
-                return Ok(());
-            }
             "grid_formulas" => {
                 s::grid(&mut self.formulas_columns, payload);
                 return Ok(());
@@ -172,16 +176,7 @@ impl Definitions {
                 s::grid(&mut self.routings_columns, payload);
                 return Ok(());
             }
-            "select" => {
-                // Reading is already allowed by the route; the facade asks again.
-                let id = s::id(payload);
-                if id.is_some_and(|id| self.products.iter().any(|p| p.id == id)) {
-                    return self.select(scope, id).await;
-                }
-                self.notice.fail("Product definition not found.");
-                return Ok(());
-            }
-            "create_product" | "publish_formula" | "publish_routing" => {}
+            "create_definition" | "publish_formula" | "publish_routing" => {}
             _ => return Err(bilibi_database::Error::Invalid),
         }
         if !s::can(&self.pages.db, scope, MANAGE).await? {
@@ -190,55 +185,48 @@ impl Definitions {
             return Ok(());
         }
         match kind {
-            "create_product" => self.create_product(scope, payload).await?,
+            "create_definition" => self.create_definition(scope, payload).await?,
             "publish_formula" => self.publish(scope, payload, true).await?,
             _ => self.publish(scope, payload, false).await?,
         }
         Ok(())
     }
 
-    async fn create_product(&mut self, scope: &Scope, payload: &Value) -> Result<()> {
+    async fn create_definition(&mut self, scope: &Scope, payload: &Value) -> Result<()> {
         let posted = s::form(payload, PRODUCT);
-        let draft = Draft {
-            values: [
-                s::pick(&posted, "item_id"),
-                s::pick(&posted, "code"),
-                s::pick(&posted, "name"),
-            ],
-        };
+        let draft = s::pick(&posted, "item_id");
         let Some(company) = s::company(scope) else {
-            self.product_draft = draft;
+            self.definition_draft = draft;
             self.notice.fail("Company not found");
             return Ok(());
         };
-        let item_id = draft.values[0].trim().parse::<i64>().ok();
-        let new = NewProduct {
-            item_id: item_id.unwrap_or_default(),
-            code: draft.values[1].clone(),
-            name: draft.values[2].clone(),
-        };
-        let done = if item_id.is_some() {
+        let item_id = draft.trim().parse::<i64>().ok();
+        let done = if let Some(item_id) = item_id {
             self.pages
                 .definitions
-                .create_product(scope, company, &new)
+                .create_definition(
+                    scope,
+                    company,
+                    &NewDefinition {
+                        product_id: self.product_id,
+                        item_id,
+                    },
+                )
                 .await
         } else {
             Err(crate::Error::Inventory(
                 bilibi_factory_inventory::Error::ItemNotFound,
             ))
         };
-        let created = s::refusal(done)?;
-        match created {
-            Ok(product) => {
-                let id = product.id;
-                drop(product);
-                self.product_draft = Draft::default();
+        match s::refusal(done)? {
+            Ok(_) => {
+                self.definition_draft = String::new();
                 self.load(scope).await?;
-                self.select(scope, Some(id)).await?;
-                self.notice.success("Product definition created.");
+                self.saved = Some("Product definition created.");
             }
             Err(message) => {
-                self.product_draft = draft;
+                self.definition_draft = draft;
+                self.load(scope).await?;
                 self.notice.fail(message);
             }
         }
@@ -253,14 +241,11 @@ impl Definitions {
         };
         let posted = s::form(payload, form);
         let draft = Draft {
-            values: [
-                s::pick(&posted, first),
-                s::pick(&posted, "process_config"),
-                String::new(),
-            ],
+            values: [s::pick(&posted, first), s::pick(&posted, "process_config")],
         };
-        let (Some(product), Some(company)) = (self.selected, s::company(scope)) else {
-            self.notice.fail("Select a product definition.");
+        let product = self.product_id;
+        let Some(company) = s::company(scope) else {
+            self.notice.fail("Company not found");
             return Ok(());
         };
         let attrs = json!({
@@ -286,8 +271,8 @@ impl Definitions {
                 } else {
                     self.routing_draft = blank_publish();
                 }
-                self.select(scope, Some(product)).await?;
-                self.notice.success(if formula {
+                self.load(scope).await?;
+                self.saved = Some(if formula {
                     "Formula revision published."
                 } else {
                     "Routing revision published."
@@ -299,6 +284,7 @@ impl Definitions {
                 } else {
                     self.routing_draft = draft;
                 }
+                self.load(scope).await?;
                 self.notice.fail(message);
             }
         }
@@ -308,27 +294,6 @@ impl Definitions {
     fn block(columns: &ListColumns, value: &Value) -> Result<Html> {
         let text = s::json(value, columns.mode() != RowMode::Compact);
         s::render(Block { text: &text })
-    }
-
-    fn product_rows(&self) -> Result<Vec<FlexRow>> {
-        let mut rows = Vec::with_capacity(self.products.len());
-        for product in &self.products {
-            let mut row = FlexRow::new(product.id.to_string());
-            row.dom_id = Some(format!("product-definition-{}", product.id));
-            row = s::slot(row, "code", &product.code);
-            row = s::slot(row, "name", &product.name);
-            row.actions = s::render(Button {
-                id: &format!("product-definition-{}-revisions", product.id),
-                button_type: "button",
-                event: "select",
-                name: "id",
-                value: &product.id.to_string(),
-                body: Html::text("Revisions"),
-                ..Button::default()
-            })?;
-            rows.push(row);
-        }
-        Ok(rows)
     }
 
     /// A line as stored: absent optional keys stay absent, not `null`.
@@ -393,7 +358,8 @@ impl Definitions {
             .collect()
     }
 
-    fn product_form(&self) -> Result<Html> {
+    /// The only write before a definition exists: which item the product yields.
+    fn definition_form(&self) -> Result<Html> {
         let items = self
             .items
             .iter()
@@ -404,38 +370,22 @@ impl Definitions {
                 )
             })
             .collect();
-        let item = s::text_field(
-            PRODUCT,
-            "item_id",
-            "Output item",
-            &self.product_draft.values[0],
-        )
-        .kind(InputKind::Select)
-        .prompt("Choose an item")
-        .options(items);
-        let form = s::render(s::FormCard {
+        let item = s::text_field(PRODUCT, "item_id", "Output item", &self.definition_draft)
+            .kind(InputKind::Select)
+            .prompt("Choose an item")
+            .options(items);
+        s::render(s::FormCard {
             form_id: "product-form",
-            event: "create_product",
-            fields: vec![
-                item,
-                s::text_field(PRODUCT, "code", "Code", &self.product_draft.values[1]),
-                s::text_field(PRODUCT, "name", "Name", &self.product_draft.values[2]),
-            ],
+            event: "create_definition",
+            fields: vec![item],
             submit: "Create product definition",
             cancel: false,
-        })?;
-        s::render(Card {
-            id: "new-product",
-            title: "New product definition",
-            class: "mt-5",
-            body: form,
-            ..Card::default()
         })
     }
 
     /// One revision card: its table, then the publish form when allowed.
     #[allow(clippy::too_many_arguments)]
-    fn revisions_card(&self, product: &Product, formula: bool, rows: Vec<FlexRow>) -> Result<Html> {
+    fn revisions_card(&self, formula: bool, rows: Vec<FlexRow>) -> Result<Html> {
         let (id, noun, columns, draft, form_id, event, label, hint, button) = if formula {
             (
                 "formula-revisions",
@@ -476,7 +426,8 @@ impl Definitions {
         };
         let namespace = if formula { FORMULA } else { ROUTING };
         let first = if formula { "lines" } else { "operations" };
-        let mut body = s::table(
+        let mut body = s::table_in(
+            PANEL,
             &format!("{id}-table"),
             if formula {
                 "grid_formulas"
@@ -509,7 +460,7 @@ impl Definitions {
         }
         s::render(Card {
             id,
-            title: &format!("{} {noun}", product.name),
+            title: &format!("Product {noun}"),
             body,
             ..Card::default()
         })
@@ -517,45 +468,76 @@ impl Definitions {
 
     pub(super) fn view(&self) -> Result<String> {
         let mut body = self.notice.alert("definition-error")?;
-        if self.can_manage {
-            body.push(&self.product_form()?);
+        if let Some(message) = self.saved {
+            body.push(&s::render(Alert {
+                kind: StatusKind::Success,
+                id: "definition-saved",
+                class: "mt-4",
+                body: Html::text(message),
+            })?);
         }
-        let products = s::table(
-            "product-definitions-table",
-            "grid_products",
-            "Product definitions",
-            &self.products_columns,
-            self.product_rows()?,
-            true,
-            ("No product definitions", "Create one for a company item."),
-        )?;
-        body.push(&s::render(Card {
-            id: "product-definitions",
-            inner_class: "p-0",
-            class: "mt-5",
-            body: products,
-            ..Card::default()
-        })?);
-        if let Some(product) = self.selected() {
-            let mut cards = self.revisions_card(product, true, self.formula_rows()?)?;
-            cards.push(&self.revisions_card(product, false, self.routing_rows()?)?);
+        body.push(&self.definition_card()?);
+        if self.definition.is_some() {
+            let mut cards = self.revisions_card(true, self.formula_rows()?)?;
+            cards.push(&self.revisions_card(false, self.routing_rows()?)?);
             body.push(&s::render(Revisions { body: cards })?);
         }
-        Ok(s::render(PageView {
-            flash: self.notice.flash_map(),
-            id: "definitions-index",
-            title: "BOM formulas & routings",
-            subtitle: "Published revisions are immutable. New versions use the current company items, units, and resources.",
-            actions: Html::EMPTY,
+        Ok(s::render(Panel { id: PANEL, body })?.as_str().to_owned())
+    }
+
+    /// What Factory knows about the product: the item it yields, or how to define one.
+    fn definition_card(&self) -> Result<Html> {
+        let body = if let Some(definition) = &self.definition {
+            let label = match &self.item {
+                Some(item) => format!("{} — {}", item.sku, item.title),
+                None => format!("Item {}", definition.item_id),
+            };
+            s::render(Facts {
+                label: "Output item",
+                value: &label,
+            })?
+        } else if self.can_manage {
+            self.definition_form()?
+        } else {
+            s::render(EmptyState::missing(
+                "No product definition",
+                "Factory has not defined how this product is made.",
+            ))?
+        };
+        s::render(Card {
+            id: "product-definition",
+            title: "Factory",
             body,
-            dialog: Html::EMPTY,
-        })?
-        .as_str()
-        .to_owned())
+            ..Card::default()
+        })
     }
 }
 
-/// The selected product's two cards, spaced as Bilimbi's `mt-5 space-y-5`.
+/// The panel's frame: the host supplies the page and its header. Its ID is the
+/// one the Core product page gives this embed (`product-panel-` and the
+/// contribution ID with `.` and `/` as `-`); the host sends the panel's events
+/// to the element it names.
+#[derive(Template)]
+#[template(
+    source = r#"<div id="{{ id }}" data-target="{{ id }}" class="space-y-5">{{ body|safe }}</div>"#,
+    ext = "html"
+)]
+struct Panel<'a> {
+    id: &'a str,
+    body: Html,
+}
+
+#[derive(Template)]
+#[template(
+    source = r#"<dl class="p-4"><dt class="text-sm text-muted">{{ label }}</dt><dd id="product-definition-item">{{ value }}</dd></dl>"#,
+    ext = "html"
+)]
+struct Facts<'a> {
+    label: &'a str,
+    value: &'a str,
+}
+
+/// The product's two revision cards, spaced as Bilimbi's `mt-5 space-y-5`.
 #[derive(Template)]
 #[template(
     source = r#"<div class="mt-5 space-y-5">{{ body|safe }}</div>"#,

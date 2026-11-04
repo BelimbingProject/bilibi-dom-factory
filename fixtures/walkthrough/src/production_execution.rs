@@ -14,7 +14,7 @@ use bilibi_factory_inventory::{
     PostingRequest, StockLine, UnitVariance, Variance,
 };
 use bilibi_factory_product_definition::{
-    NewProduct, NewResource, NewResourceType, ProductDefinition,
+    NewDefinition, NewResource, NewResourceType, ProductDefinition,
 };
 use bilibi_factory_production_execution::{
     Approver, Completion, HoldOverrideRequest, NewOrder, OrderKind, ProductionExecution, Source,
@@ -27,12 +27,15 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+#[path = "core_products.rs"]
+mod core_products;
+
 bilibi_walkthrough_fixture::walkthrough_vocabulary!();
 bilibi_walkthrough_fixture::walkthrough_module_roles!();
 bilibi_walkthrough_fixture::inventory::submit! { bilibi_walkthrough_fixture::registry::Contribution::new(VOCABULARY,"factory.xp1.roles",bilibi_walkthrough_fixture::registry::Provenance {module:"base/authz",source:file!(),line:line!()}, &VocabularyContribution {
     domains:&[],verbs:&[],capabilities:&[] as &[CapabilityDefinition],system_principals:&[SystemPrincipalDefinition {name:"factory-import-fixture",capabilities:&["factory.production-execution.import"]}],
     roles:&[
-        RoleDefinition {code:"manager",name:"manager",description:"Walkthrough fixture role",grant_all:false,capabilities:&["factory.production-execution.floor.view","factory.production-execution.configuration.view","factory.production-execution.configuration.manage","factory.product-definition.configuration.view","factory.product-definition.configuration.manage","factory.inventory.configuration.view","factory.inventory.configuration.manage","commerce.inventory.item.create","commerce.inventory.item.view"]},
+        RoleDefinition {code:"manager",name:"manager",description:"Walkthrough fixture role",grant_all:false,capabilities:&["factory.production-execution.floor.view","factory.production-execution.configuration.view","factory.production-execution.configuration.manage","factory.product-definition.configuration.view","factory.product-definition.configuration.manage","products.view","factory.inventory.configuration.view","factory.inventory.configuration.manage","commerce.inventory.item.create","commerce.inventory.item.view"]},
         RoleDefinition {code:"viewer",name:"viewer",description:"Walkthrough fixture role",grant_all:false,capabilities:&["factory.production-execution.floor.view"]},
     ],
 }) }
@@ -124,6 +127,15 @@ async fn main() -> Result<(), Error> {
     let pe = app
         .services
         .get::<ProductionExecution>(bilibi_factory_production_execution::SERVICE)?;
+    // Work follows an explicit desk: the viewer works at company 1 by one.
+    db.get()
+        .await?
+        .batch_execute(
+            "INSERT INTO persons(id,tenant_id,name,code,kind,email) VALUES(4,1,'Lee Viewer','factory_viewer','human','lee@example.test') ON CONFLICT DO NOTHING;
+             UPDATE users SET person_id=4 WHERE tenant_id=1 AND id=2 AND person_id IS NULL;
+             INSERT INTO user_desks(tenant_id,person_id,company_id) SELECT 1,person_id,1 FROM users WHERE tenant_id=1 AND id=2 ON CONFLICT DO NOTHING;",
+        )
+        .await?;
     let (manager, _) = login(&app, "manager@example.test").await?;
     let (viewer, _) = login(&app, "viewer@example.test").await?;
     let (staff, _) = login(&app, "staff@example.test").await?;
@@ -227,20 +239,19 @@ async fn main() -> Result<(), Error> {
     }
     let (r1, r2) = (resources[0], resources[1]);
     let product = pd
-        .create_product(
+        .create_definition(
             &manager,
             1,
-            &NewProduct {
+            &NewDefinition {
+                product_id: core_products::goods(&**db.get().await?, manager.tenant(), "P-1", "Product one").await?,
                 item_id: product_item,
-                code: "P-1".into(),
-                name: "Product one".into(),
             },
         )
         .await?;
     pd.publish_formula(
         &manager,
         1,
-        product.id,
+        product.product_id,
         &json!({"lines":[
             {"item_id":held,"unit_id":kg.id,"role":"input","quantity":"10","material_hold_rule":{"hours":2}},
             {"item_id":free,"unit_id":kg.id,"role":"input","quantity":"5"},
@@ -253,7 +264,7 @@ async fn main() -> Result<(), Error> {
     pd.publish_routing(
         &manager,
         1,
-        product.id,
+        product.product_id,
         &json!({"operations":[
             {"code":"blend","sequence":1,"inputs":[held,free],"outputs":[product_item,trim],"allowed_resource_ids":[r1]},
             {"code":"make","sequence":2,"inputs":[],"outputs":[product_item,held],"allowed_resource_ids":[r1,r2]},
@@ -266,20 +277,19 @@ async fn main() -> Result<(), Error> {
     let rule_product_item = items["XP-TRIM"];
     let _ = rule_product_item;
     let bad = pd
-        .create_product(
+        .create_definition(
             &manager,
             1,
-            &NewProduct {
+            &NewDefinition {
+                product_id: core_products::goods(&**db.get().await?, manager.tenant(), "P-RULE", "Rule product").await?,
                 item_id: rule,
-                code: "P-RULE".into(),
-                name: "Rule product".into(),
             },
         )
         .await?;
     pd.publish_formula(
         &manager,
         1,
-        bad.id,
+        bad.product_id,
         &json!({"lines":[
             {"item_id":free,"unit_id":kg.id,"role":"input","quantity":"1"},
             {"item_id":rule,"unit_id":kg.id,"role":"output","quantity":"1"}
@@ -289,7 +299,7 @@ async fn main() -> Result<(), Error> {
     pd.publish_routing(
         &manager,
         1,
-        bad.id,
+        bad.product_id,
         &json!({"operations":[{"code":"go","sequence":1,"inputs":[free],"outputs":[rule],"allowed_resource_ids":[r1]}]}),
     )
     .await?;
@@ -331,7 +341,7 @@ async fn main() -> Result<(), Error> {
     let new_order = NewOrder {
         code: "ORD-1".into(),
         kind: OrderKind::Order,
-        product_id: product.id,
+        product_id: product.product_id,
         formula_version: 1,
         routing_version: 1,
         demand_ref: Some("demand-7".into()),
@@ -854,7 +864,7 @@ async fn main() -> Result<(), Error> {
                 1,
                 &NewOrder {
                     code: "ORD-RULE".into(),
-                    product_id: bad.id,
+                    product_id: bad.product_id,
                     ..new_order.clone()
                 },
             )
@@ -1223,7 +1233,7 @@ async fn main() -> Result<(), Error> {
     )?;
     refusal(
         "ordinary definition reads still require view",
-        pd.select_revisions(&principal, 1, product.id, 1, 1).await,
+        pd.select_revisions(&principal, 1, product.product_id, 1, 1).await,
         "Access denied",
     )?;
     let imported_run = Completion {

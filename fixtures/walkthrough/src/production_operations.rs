@@ -15,7 +15,7 @@ use bilibi_factory_inventory::{
     Decimal, Inventory, MaterialTyping, NewItem, NewLocation, NewUnit, PostingRequest, StockLine,
 };
 use bilibi_factory_product_definition::{
-    NewProduct, NewResource, NewResourceType, ProductDefinition,
+    NewDefinition, NewResource, NewResourceType, ProductDefinition,
 };
 use bilibi_tenancy::{ProofFuture, Scope};
 use bilibi_walkthrough_fixture::registry::{Contribution, Provenance};
@@ -23,12 +23,15 @@ use serde_json::{json, Value};
 use std::time::{Duration, SystemTime};
 use tokio_postgres::Transaction;
 
+#[path = "core_products.rs"]
+mod core_products;
+
 bilibi_walkthrough_fixture::walkthrough_vocabulary!();
 bilibi_walkthrough_fixture::walkthrough_module_roles!();
 bilibi_walkthrough_fixture::inventory::submit! { Contribution::new(VOCABULARY,"factory.h6.roles",Provenance {module:"base/authz",source:file!(),line:line!()}, &VocabularyContribution {
     domains:&[],verbs:&[],capabilities:&[] as &[CapabilityDefinition],system_principals:&[],
     roles:&[
-        RoleDefinition {code:"manager",name:"manager",description:"Walkthrough fixture role",grant_all:false,capabilities:&["factory.production-execution.floor.view","factory.production-execution.configuration.view","factory.production-execution.configuration.manage","factory.product-definition.configuration.view","factory.product-definition.configuration.manage","factory.inventory.configuration.view","factory.inventory.configuration.manage","commerce.inventory.item.create","commerce.inventory.item.view"]},
+        RoleDefinition {code:"manager",name:"manager",description:"Walkthrough fixture role",grant_all:false,capabilities:&["factory.production-execution.floor.view","factory.production-execution.configuration.view","factory.production-execution.configuration.manage","factory.product-definition.configuration.view","factory.product-definition.configuration.manage","products.view","factory.inventory.configuration.view","factory.inventory.configuration.manage","commerce.inventory.item.create","commerce.inventory.item.view"]},
         RoleDefinition {code:"viewer",name:"viewer",description:"Walkthrough fixture role",grant_all:false,capabilities:&["factory.production-execution.floor.view"]},
     ],
 }) }
@@ -98,14 +101,13 @@ async fn preview(plans: &Plans, who: &Actor, ops: &[PlannedOperation]) -> Result
 async fn commit(
     plans: &Plans,
     who: &Actor,
-    review: &Value,
+    _review: &Value,
     ops: &[PlannedOperation],
 ) -> bilibi_agent_api::Result<Value> {
     plans
         .commit(
             &who.scope,
             &who.browser,
-            review["plan_code"].as_str().unwrap_or_default(),
             ops,
         )
         .await
@@ -318,17 +320,16 @@ async fn main() -> Result<(), Error> {
         .await?
         .id;
     let product = pd
-        .create_product(
+        .create_definition(
             &manager.scope,
             1,
-            &NewProduct {
+            &NewDefinition {
+                product_id: core_products::goods(&**db.get().await?, manager.scope.tenant(), "H6", "Operation definition").await?,
                 item_id: items[1],
-                code: "H6".into(),
-                name: "Operation definition".into(),
             },
         )
         .await?
-        .id;
+        .product_id;
     pd.publish_formula(&manager.scope,1,product,&json!({"lines":[
         {"item_id":items[0],"unit_id":units[0],"role":"input","quantity":"3","material_hold_rule":{"hours":2}},
         {"item_id":items[1],"unit_id":units[0],"role":"output","quantity":"3"}]})).await?;
@@ -740,7 +741,6 @@ async fn over_http(
             &manager.scope,
             &start.user_code,
             Decision::Approve,
-            access.connection_expiry().await?,
         )
         .await?;
     let db = app
@@ -841,7 +841,6 @@ async fn over_http(
             &manager.scope,
             &params,
             resource,
-            access.connection_expiry().await?,
         )
         .await?;
     let token = access

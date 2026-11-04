@@ -98,14 +98,13 @@ async fn preview(plans: &Plans, who: &Actor, ops: &[PlannedOperation]) -> Result
 async fn commit(
     plans: &Plans,
     who: &Actor,
-    review: &Value,
+    _review: &Value,
     ops: &[PlannedOperation],
 ) -> Result<Value, bilibi_agent_api::Error> {
     plans
         .commit(
             &who.scope,
             &who.browser,
-            review["plan_code"].as_str().unwrap_or_default(),
             ops,
         )
         .await
@@ -794,7 +793,6 @@ async fn over_http(
             &manager.scope,
             &start.user_code,
             Decision::Approve,
-            access.connection_expiry().await?,
         )
         .await?;
     // Time travel on the disposable row: the client may poll now.

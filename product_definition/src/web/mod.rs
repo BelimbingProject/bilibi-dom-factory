@@ -1,9 +1,9 @@
 //! Product Definition's pages (Bilimbi `ProductDefinition.Web.*Live`): resource
-//! types, resources, and BOM formulas & routings. Each is a live screen over the
-//! facade; the route guard checks the view capability on every request and live
+//! types and resources, plus Factory's panel on the Core product page for the
+//! product's formulas & routings. Each is a live screen over the facade; the route guard checks the view capability on every request and live
 //! event, each write-shaped event asks for manage again, and the facade asks a
 //! last time inside its transaction.
-mod definitions;
+mod panel;
 mod resources;
 mod shared;
 mod types;
@@ -29,17 +29,24 @@ pub(crate) struct Pages {
 enum Screen {
     Types(types::Types),
     Resources(resources::Resources),
-    Definitions(Box<definitions::Definitions>),
+    Product(Box<panel::ProductPanel>),
 }
 
 impl Screen {
-    fn open(pages: &Pages, operation: &str) -> Result<Self> {
-        match operation {
+    fn open(pages: &Pages, request: &PageRequest<'_, Scope>) -> Result<Self> {
+        match request.operation {
             "resource-types" => Ok(Self::Types(types::Types::new(pages)?)),
             "resources" => Ok(Self::Resources(resources::Resources::new(pages)?)),
-            "definitions" => Ok(Self::Definitions(Box::new(definitions::Definitions::new(
-                pages,
-            )?))),
+            // The Core product page mounts this panel with its product's ID.
+            "product-panel" => {
+                let product = bilibi_ui::params::positive_id(
+                    request.path.get("product_id").map(String::as_str),
+                )
+                .ok_or(Error::NotFound)?;
+                Ok(Self::Product(Box::new(panel::ProductPanel::new(
+                    pages, product,
+                )?)))
+            }
             _ => Err(Error::NotFound),
         }
     }
@@ -48,7 +55,7 @@ impl Screen {
         match self {
             Self::Types(screen) => screen.refresh(scope).await,
             Self::Resources(screen) => screen.refresh(scope).await,
-            Self::Definitions(screen) => screen.refresh(scope).await,
+            Self::Product(screen) => screen.refresh(scope).await,
         }
     }
 
@@ -56,7 +63,7 @@ impl Screen {
         match self {
             Self::Types(screen) => screen.event(scope, payload).await,
             Self::Resources(screen) => screen.event(scope, payload).await,
-            Self::Definitions(screen) => screen.event(scope, payload).await,
+            Self::Product(screen) => screen.event(scope, payload).await,
         }
     }
 
@@ -64,7 +71,7 @@ impl Screen {
         match self {
             Self::Types(screen) => screen.view(),
             Self::Resources(screen) => screen.view(),
-            Self::Definitions(screen) => screen.view(),
+            Self::Product(screen) => screen.view(),
         }
     }
 }
@@ -74,7 +81,7 @@ impl Page<Scope, Error> for Pages {
         match operation {
             "resource-types" => Some("Resource types"),
             "resources" => Some("Resources"),
-            "definitions" => Some("BOM formulas & routings"),
+            "product-panel" => Some("Product"),
             _ => None,
         }
     }
@@ -82,7 +89,7 @@ impl Page<Scope, Error> for Pages {
     fn render<'a>(&'a self, request: PageRequest<'a, Scope>) -> PageFuture<'a, Error> {
         Box::pin(async move {
             let scope = request.scope.ok_or(Error::Unauthorized)?;
-            let mut screen = Screen::open(self, request.operation)?;
+            let mut screen = Screen::open(self, &request)?;
             screen.refresh(scope).await?;
             Ok(PageBody {
                 html: screen.view()?,
@@ -95,7 +102,7 @@ impl Page<Scope, Error> for Pages {
     fn mount<'a>(&'a self, request: PageRequest<'a, Scope>) -> MountFuture<'a, Scope, Error> {
         Box::pin(async move {
             let state: Box<dyn LiveState<Scope, Error>> =
-                Box::new(Live(Screen::open(self, request.operation)?));
+                Box::new(Live(Screen::open(self, &request)?));
             Ok(Some(state))
         })
     }

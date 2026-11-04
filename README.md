@@ -10,7 +10,7 @@ with the same module IDs, capability keys, table names and wording.
 | Module | Descriptor ID | Crate | State |
 | --- | --- | --- | --- |
 | [`inventory/`](inventory/README.md) | `factory/inventory` | `bilibi-factory-inventory` | units, stock locations and item settings (X0); item catalog (XI1); audited Material Transaction ledger, weighed receipts, transfers, consumption, corrections and stock reads (XI2); lot and unit genealogy, transforms, balances and the production posting authority (XI3); agent operations for locations, postings, stock, transaction and genealogy reads (H5); the five Inventory pages (XI4) |
-| [`product_definition/`](product_definition/README.md) | `factory/product_definition` | `bilibi-factory-product-definition` | resource types, resources, products and immutable formula/routing revisions (XD1); Resource types, Resources and BOM formulas & routings pages (XD2) |
+| [`product_definition/`](product_definition/README.md) | `factory/product_definition` | `bilibi-factory-product-definition` | resource types, resources, the manufacturing definition of a Core product and immutable formula/routing revisions (XD1); Resource types and Resources pages, and Factory's panel on the Core product page (XD2) |
 | [`production_execution/`](production_execution/README.md) | `factory/production_execution` | `bilibi-factory-production-execution` | production orders and live/import operation completion posted atomically through Inventory, with material hold rules and overrides (XP1); shop-floor capture and pages follow |
 
 Factory declares no dependency on any other Domain container, and no Domain
@@ -89,8 +89,9 @@ from the same fixture folder. It installs the fixture accounts, one unit and two
 items, and serves the composed app; sign in at `http://localhost:3020` (use
 `localhost`, the origin the session cookie is issued for) as
 `manager@example.test` (manages) or `viewer@example.test` (reads), password
-`bilibi-dev`, and open Administration → Factory → Resources, BOM formulas &
-routings, or `/factory/resource-types`.
+`bilibi-dev`, and open Administration → Factory → Resources, or
+`/factory/resource-types`. Create a goods product on Administration → Products
+and open it to use the Factory panel for its formulas and routings.
 
 For XD1, use a separate freshly migrated disposable database and run
 `BILIBI_FACTORY_FIXTURE=disposable cargo run --bin product-definition` from

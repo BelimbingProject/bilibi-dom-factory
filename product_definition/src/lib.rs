@@ -1,5 +1,6 @@
-//! Bilimbi.Factory.ProductDefinition: company resources, products and exact,
-//! immutable formula/routing revisions, with their pages (`web`).
+//! Bilimbi.Factory.ProductDefinition: company resources, the manufacturing
+//! definition of a Core product, and exact, immutable formula/routing
+//! revisions, with their pages (`web`).
 use bilibi_database::{Db, MutationBoundary};
 use bilibi_factory_inventory::Inventory;
 use bilibi_module_registry::{Layer, Module, Service};
@@ -18,8 +19,9 @@ mod store;
 mod web;
 pub use error::Error;
 pub use model::{
-    FormulaLine, FormulaRevision, NewProduct, NewResource, NewResourceType, Operation, Product,
-    Resource, ResourceType, ResourceTypeUpdate, ResourceUpdate, RoutingRevision, SelectedRevisions,
+    Definition, FormulaLine, FormulaRevision, NewDefinition, NewResource, NewResourceType,
+    Operation, Resource, ResourceType, ResourceTypeUpdate, ResourceUpdate, RoutingRevision,
+    SelectedRevisions,
 };
 
 pub const SERVICE: &str = "factory/product_definition.product_definition";
@@ -29,6 +31,7 @@ pub struct ProductDefinition {
     db: Db,
     mutations: Arc<MutationBoundary>,
     inventory: Arc<Inventory>,
+    products: Arc<bilibi_product::Products>,
 }
 
 // Check authorization inside the transaction, before validation or mutation.
@@ -89,60 +92,80 @@ impl ProductDefinition {
         };
         let client = self.read_client(scope, company).await?;
         if let Some(product) = product {
-            let _: Product =
-                store::fetch(&**client, scope, company, Kind::Product, product).await?;
+            let _: Definition =
+                store::fetch(&**client, scope, company, Kind::Definition, product).await?;
         }
         store::list(&**client, scope, company, kind, product, limit).await
     }
-    pub async fn create_product(
+    /// Defines how a company makes one Core product: the Inventory item it
+    /// yields. The product must exist, be goods and not be retired; its code,
+    /// name and unit are read from Core, never copied.
+    pub async fn create_definition(
         &self,
         scope: &Scope,
         company: i64,
-        new: &NewProduct,
-    ) -> Result<Product> {
+        new: &NewDefinition,
+    ) -> Result<Definition> {
         audited!(
             self,
             scope,
             company,
-            "factory.product_definition.create_product",
+            "factory.product_definition.create_definition",
             |tx| {
+                let product = match self.products.get(tx.sql(), scope, new.product_id).await {
+                    Ok(product) => product,
+                    Err(bilibi_database::Error::NotFound) => return Err(Error::ProductNotFound),
+                    Err(error) => return Err(error.into()),
+                };
+                if product.status != "active" {
+                    return Err(Error::Invalid {
+                        field: "Product",
+                        message: "is retired",
+                    });
+                }
+                if product.kind != "goods" {
+                    return Err(Error::Invalid {
+                        field: "Product",
+                        message: "must be goods",
+                    });
+                }
                 self.inventory
                     .get_item_on(tx.sql(), scope, company, new.item_id)
                     .await?;
-                store::names(
-                    tx.sql(),
-                    scope,
-                    company,
-                    Kind::Product,
-                    None,
-                    &new.code,
-                    &new.name,
-                )
-                .await?;
-                if tx.sql().query_opt("SELECT 1 FROM factory_products WHERE tenant_id=$1 AND company_id=$2 AND item_id=$3",&[&scope.tenant(),&company,&new.item_id]).await?.is_some() {
-                return Err(Error::Invalid {field:"Item id",message:"has already been taken"});
-            }
+                if tx.sql().query_opt("SELECT 1 FROM factory_product_definitions WHERE tenant_id=$1 AND company_id=$2 AND product_id=$3",&[&scope.tenant(),&company,&new.product_id]).await?.is_some() {
+                    return Err(Error::Invalid {field:"Product",message:"has already been taken"});
+                }
+                if tx.sql().query_opt("SELECT 1 FROM factory_product_definitions WHERE tenant_id=$1 AND company_id=$2 AND item_id=$3",&[&scope.tenant(),&company,&new.item_id]).await?.is_some() {
+                    return Err(Error::Invalid {field:"Item id",message:"has already been taken"});
+                }
                 store::insert(
                     &mut tx,
                     scope,
                     company,
-                    Kind::Product,
-                    json!({"item_id":new.item_id,"code":new.code,"name":new.name}),
+                    Kind::Definition,
+                    json!({"product_id":new.product_id,"item_id":new.item_id}),
                 )
                 .await
             }
         )
     }
-    pub async fn get_product(&self, scope: &Scope, company: i64, id: i64) -> Result<Product> {
-        self.get(scope, company, Kind::Product, id).await
+    /// The definition of a Core product, by the product's ID.
+    pub async fn get_definition(
+        &self,
+        scope: &Scope,
+        company: i64,
+        product: i64,
+    ) -> Result<Definition> {
+        self.get(scope, company, Kind::Definition, product).await
     }
-    pub async fn list_products(
+    pub async fn list_definitions(
         &self,
         scope: &Scope,
         company: i64,
         limit: Option<i64>,
-    ) -> Result<Vec<Product>> {
-        self.list(scope, company, Kind::Product, None, limit).await
+    ) -> Result<Vec<Definition>> {
+        self.list(scope, company, Kind::Definition, None, limit)
+            .await
     }
     pub async fn create_resource_type(
         &self,
@@ -305,7 +328,8 @@ impl ProductDefinition {
         kind: Kind,
     ) -> Result<T> {
         let client = self.read_client(scope, company).await?;
-        let _: Product = store::fetch(&**client, scope, company, Kind::Product, product).await?;
+        let _: Definition =
+            store::fetch(&**client, scope, company, Kind::Definition, product).await?;
         store::revision(&**client, scope, company, kind, product, version).await
     }
     pub async fn get_formula_revision(
@@ -432,13 +456,14 @@ impl ProductDefinition {
         formula_version: i32,
         routing_version: i32,
     ) -> Result<SelectedRevisions> {
-        let product: Product = store::fetch(client, scope, company, Kind::Product, product).await?;
+        let definition: Definition =
+            store::fetch(client, scope, company, Kind::Definition, product).await?;
         let formula = store::revision(
             client,
             scope,
             company,
             Kind::Formula,
-            product.id,
+            definition.product_id,
             formula_version,
         )
         .await?;
@@ -447,13 +472,13 @@ impl ProductDefinition {
             scope,
             company,
             Kind::Routing,
-            product.id,
+            definition.product_id,
             routing_version,
         )
         .await?;
-        revisions::compatible(&product, &formula, &routing)?;
+        revisions::compatible(&definition, &formula, &routing)?;
         Ok(SelectedRevisions {
-            product,
+            definition,
             formula,
             routing,
         })
@@ -462,13 +487,17 @@ impl ProductDefinition {
 
 inventory::submit! { Module {
     id: "factory/product_definition", layer: Layer::Domains,
-    dependencies: &["base/authz","base/database","base/menu","base/module_registry","base/tenancy","base/ui","core/company","factory/inventory"],
-    migrations: &[("factory-product-definition-001-definitions",include_str!("../migrations/001-definitions.sql"))],
+    dependencies: &["base/authz","base/database","base/menu","base/module_registry","base/tenancy","base/ui","core/company","core/product","factory/inventory"],
+    migrations: &[
+        ("factory-product-definition-001-definitions",include_str!("../migrations/001-definitions.sql")),
+        ("factory-product-definition-002-core-products",include_str!("../migrations/002-core-products.sql")),
+    ],
     services: &[
         Service { id:SERVICE, factory: |services| Ok(Arc::new(ProductDefinition {
             db:services.get::<Db>("base/database.pool")?.as_ref().clone(),
             mutations:services.get("base/database.mutations")?,
             inventory:services.get(bilibi_factory_inventory::SERVICE)?,
+            products:services.get(bilibi_product::SERVICE)?,
         })) },
         Service { id:PAGES, factory: |services| Ok(Arc::new(bilibi_ui::page::PageService::<bilibi_tenancy::Scope, bilibi_database::Error>(Arc::new(web::Pages {
             db:services.get::<Db>("base/database.pool")?.as_ref().clone(),

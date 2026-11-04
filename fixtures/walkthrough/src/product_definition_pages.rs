@@ -13,8 +13,8 @@ bilibi_walkthrough_fixture::walkthrough_module_roles!();
 bilibi_walkthrough_fixture::inventory::submit! { bilibi_walkthrough_fixture::registry::Contribution::new(VOCABULARY,"factory.xd2.roles",bilibi_walkthrough_fixture::registry::Provenance {module:"base/authz",source:file!(),line:line!()}, &VocabularyContribution {
     domains:&[],verbs:&[],capabilities:&[] as &[CapabilityDefinition],system_principals:&[],
     roles:&[
-        RoleDefinition {code:"manager",name:"manager",description:"Walkthrough fixture role",grant_all:false,capabilities:&["factory.product-definition.configuration.view","factory.product-definition.configuration.manage","factory.inventory.configuration.view","factory.inventory.configuration.manage","commerce.inventory.item.create","commerce.inventory.item.list","commerce.inventory.item.view"]},
-        RoleDefinition {code:"viewer",name:"viewer",description:"Walkthrough fixture role",grant_all:false,capabilities:&["factory.product-definition.configuration.view","commerce.inventory.item.list","commerce.inventory.item.view"]},
+        RoleDefinition {code:"manager",name:"manager",description:"Walkthrough fixture role",grant_all:false,capabilities:&["factory.product-definition.configuration.view","factory.product-definition.configuration.manage","products.view","products.manage","factory.inventory.configuration.view","factory.inventory.configuration.manage","commerce.inventory.item.create","commerce.inventory.item.list","commerce.inventory.item.view"]},
+        RoleDefinition {code:"viewer",name:"viewer",description:"Walkthrough fixture role",grant_all:false,capabilities:&["factory.product-definition.configuration.view","products.view","commerce.inventory.item.list","commerce.inventory.item.view"]},
     ],
 }) }
 type Error = Box<dyn std::error::Error>;

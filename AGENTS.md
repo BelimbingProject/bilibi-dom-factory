@@ -59,6 +59,11 @@ confirmations verbatim.
   validated values on the typed row, as materials do; do not add a typed
   column or a second validator for one property, because the definitions are
   the company's and one mechanism keeps them behaving alike.
+- A product's identity (code, name, unit, price) is Core's `bilibi_product::Products`
+  (ADR 22): Product Definition keeps only a definition keyed by the Core product ID
+  and shows it as a panel on Core's product page. Do not add a Factory product
+  list, page, menu item or code/name column; Core's one list is the door
+  (`product_definition/README.md`, "One product list").
 - Read Inventory inside a sibling's mutation through `get_item_on`,
   `get_material_on` and `get_unit_on`, not a second pool connection: this sees
   pending data, retains authorization and avoids pool exhaustion under locks.

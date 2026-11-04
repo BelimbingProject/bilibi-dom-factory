@@ -5,6 +5,8 @@ use bilibi_database::Error as DatabaseError;
 pub enum Error {
     #[error("Product not found")]
     ProductNotFound,
+    #[error("Product definition not found")]
+    DefinitionNotFound,
     #[error("Resource type not found")]
     ResourceTypeNotFound,
     #[error("Resource type retired")]
