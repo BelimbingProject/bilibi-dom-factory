@@ -4,7 +4,7 @@
 //! safe-write plan service as signed-in accounts. Run once on a freshly
 //! migrated disposable database; it checks each runtime outcome and exits
 //! nonzero on an unexpected one. Plan codes are never printed.
-use bilibi_agent_access::{AgentAccess, Decision, CLIENT_ID};
+use bilibi_agent::{AgentAccess, Decision, CLIENT_ID};
 use bilibi_agent_api::{
     plans::{PlanAuthority, PlanIdentity, PlannedOperation, Plans},
     Registry, SearchOptions,
@@ -787,7 +787,7 @@ async fn over_http(
     println!("== over HTTP at {api}");
     let access = app
         .services
-        .get::<AgentAccess>("core/agent_access.grants")?;
+        .get::<AgentAccess>("core/agent.grants")?;
     let start = access.start_device(CLIENT_ID, "H5 walkthrough").await?;
     access
         .decide(
