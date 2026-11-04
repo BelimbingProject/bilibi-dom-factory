@@ -104,13 +104,7 @@ async fn commit(
     _review: &Value,
     ops: &[PlannedOperation],
 ) -> bilibi_agent_api::Result<Value> {
-    plans
-        .commit(
-            &who.scope,
-            &who.browser,
-            ops,
-        )
-        .await
+    plans.commit(&who.scope, &who.browser, ops).await
 }
 async fn run(plans: &Plans, who: &Actor, ops: &[PlannedOperation]) -> Result<Value, Error> {
     let review = preview(plans, who, ops).await?;
@@ -324,7 +318,13 @@ async fn main() -> Result<(), Error> {
             &manager.scope,
             1,
             &NewDefinition {
-                product_id: core_products::goods(&**db.get().await?, manager.scope.tenant(), "H6", "Operation definition").await?,
+                product_id: core_products::goods(
+                    &**db.get().await?,
+                    manager.scope.tenant(),
+                    "H6",
+                    "Operation definition",
+                )
+                .await?,
                 item_id: items[1],
             },
         )
@@ -732,16 +732,10 @@ async fn over_http(
     for key in ["unit_id", "conversion_version"] {
         consume_line.as_object_mut().unwrap().remove(key);
     }
-    let access = app
-        .services
-        .get::<AgentAccess>("core/agent.grants")?;
+    let access = app.services.get::<AgentAccess>("core/agent.grants")?;
     let start = access.start_device(CLIENT_ID, "H6 walkthrough").await?;
     access
-        .decide(
-            &manager.scope,
-            &start.user_code,
-            Decision::Approve,
-        )
+        .decide(&manager.scope, &start.user_code, Decision::Approve)
         .await?;
     let db = app
         .services
@@ -836,13 +830,7 @@ async fn over_http(
         code_challenge_method: "S256".into(),
         state: None,
     };
-    let code = access
-        .authorize(
-            &manager.scope,
-            &params,
-            resource,
-        )
-        .await?;
+    let code = access.authorize(&manager.scope, &params, resource).await?;
     let token = access
         .exchange_code(
             &CodeExchange {

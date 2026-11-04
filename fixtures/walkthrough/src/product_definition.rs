@@ -5,7 +5,8 @@ use bilibi_authz::{
 };
 use bilibi_factory_inventory::{Inventory, MaterialTyping, NewItem, NewUnit, PropertyDefinition};
 use bilibi_factory_product_definition::{
-    NewDefinition, NewResource, NewResourceType, ProductDefinition, ResourceTypeUpdate, ResourceUpdate,
+    NewDefinition, NewResource, NewResourceType, ProductDefinition, ResourceTypeUpdate,
+    ResourceUpdate,
 };
 use bilibi_tenancy::Scope;
 use serde_json::json;
@@ -150,7 +151,10 @@ async fn main() -> Result<(), Error> {
         item_id: output,
     };
     let product = pd.create_definition(&manager, 1, &new_definition).await?;
-    verify("definition names the Core product", product.product_id == core)?;
+    verify(
+        "definition names the Core product",
+        product.product_id == core,
+    )?;
     refusal(
         "duplicate definition",
         pd.create_definition(&manager, 1, &new_definition).await,
@@ -212,7 +216,10 @@ async fn main() -> Result<(), Error> {
     )?;
     let retired = core_products::goods(&**client, tenant, "P-RET", "Retired").await?;
     client
-        .execute("UPDATE core_products SET status='retired' WHERE id=$1", &[&retired])
+        .execute(
+            "UPDATE core_products SET status='retired' WHERE id=$1",
+            &[&retired],
+        )
         .await?;
     refusal(
         "a retired product takes no definition",
@@ -363,7 +370,9 @@ async fn main() -> Result<(), Error> {
         "first independent versions",
         f1.version == 1 && r1.version == 1 && f1.lines[0].quantity == "2.75",
     )?;
-    let selected = pd.select_revisions(&viewer, 1, product.product_id, 1, 1).await?;
+    let selected = pd
+        .select_revisions(&viewer, 1, product.product_id, 1, 1)
+        .await?;
     verify(
         "subset selection permits unused formula output",
         selected.formula == f1 && selected.routing == r1,
@@ -380,7 +389,9 @@ async fn main() -> Result<(), Error> {
     )?;
     verify(
         "old version unchanged",
-        pd.get_formula_revision(&manager, 1, product.product_id, 1).await? == f1,
+        pd.get_formula_revision(&manager, 1, product.product_id, 1)
+            .await?
+            == f1,
     )?;
     let r2 = pd
         .publish_routing(&manager, 1, product.product_id, &routing)
@@ -395,12 +406,14 @@ async fn main() -> Result<(), Error> {
     )?;
     refusal(
         "missing exact version",
-        pd.select_revisions(&manager, 1, product.product_id, 99, 1).await,
+        pd.select_revisions(&manager, 1, product.product_id, 99, 1)
+            .await,
         "Formula revision not found",
     )?;
     refusal(
         "zero version",
-        pd.get_routing_revision(&manager, 1, product.product_id, 0).await,
+        pd.get_routing_revision(&manager, 1, product.product_id, 0)
+            .await,
         "Routing revision not found",
     )?;
     let mut mismatch = routing.clone();
@@ -434,7 +447,8 @@ async fn main() -> Result<(), Error> {
     ] {
         refusal(
             label,
-            pd.publish_formula(&manager, 1, product.product_id, &attrs).await,
+            pd.publish_formula(&manager, 1, product.product_id, &attrs)
+                .await,
             reason,
         )?;
     }
@@ -575,7 +589,8 @@ async fn main() -> Result<(), Error> {
     inventory.retire_material(&manager, 1, input).await?;
     refusal(
         "retired material publication",
-        pd.publish_formula(&manager, 1, product.product_id, &formula).await,
+        pd.publish_formula(&manager, 1, product.product_id, &formula)
+            .await,
         "Material retired",
     )?;
     pd.retire_resource(&manager, 1, resource.id).await?;

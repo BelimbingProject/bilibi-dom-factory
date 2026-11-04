@@ -243,7 +243,13 @@ async fn main() -> Result<(), Error> {
             &manager,
             1,
             &NewDefinition {
-                product_id: core_products::goods(&**db.get().await?, manager.tenant(), "P-1", "Product one").await?,
+                product_id: core_products::goods(
+                    &**db.get().await?,
+                    manager.tenant(),
+                    "P-1",
+                    "Product one",
+                )
+                .await?,
                 item_id: product_item,
             },
         )
@@ -281,7 +287,13 @@ async fn main() -> Result<(), Error> {
             &manager,
             1,
             &NewDefinition {
-                product_id: core_products::goods(&**db.get().await?, manager.tenant(), "P-RULE", "Rule product").await?,
+                product_id: core_products::goods(
+                    &**db.get().await?,
+                    manager.tenant(),
+                    "P-RULE",
+                    "Rule product",
+                )
+                .await?,
                 item_id: rule,
             },
         )
@@ -1233,7 +1245,8 @@ async fn main() -> Result<(), Error> {
     )?;
     refusal(
         "ordinary definition reads still require view",
-        pd.select_revisions(&principal, 1, product.product_id, 1, 1).await,
+        pd.select_revisions(&principal, 1, product.product_id, 1, 1)
+            .await,
         "Access denied",
     )?;
     let imported_run = Completion {
