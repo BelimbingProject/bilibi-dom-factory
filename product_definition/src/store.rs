@@ -9,7 +9,7 @@ use tokio_postgres::GenericClient;
 
 #[derive(Clone, Copy)]
 pub(crate) enum Kind {
-    Product,
+    Definition,
     ResourceType,
     Resource,
     Formula,
@@ -18,11 +18,18 @@ pub(crate) enum Kind {
 impl Kind {
     fn table(self) -> &'static str {
         match self {
-            Self::Product => "factory_products",
+            Self::Definition => "factory_product_definitions",
             Self::ResourceType => "factory_resource_types",
             Self::Resource => "factory_resources",
             Self::Formula => "factory_formula_revisions",
             Self::Routing => "factory_routing_revisions",
+        }
+    }
+    /// A definition is addressed by its Core product ID; every other row by its own.
+    fn key(self) -> &'static str {
+        match self {
+            Self::Definition => "product_id",
+            _ => "id",
         }
     }
     fn projection(self) -> &'static str {
@@ -35,7 +42,7 @@ impl Kind {
     }
     fn missing(self) -> Error {
         match self {
-            Self::Product => Error::ProductNotFound,
+            Self::Definition => Error::DefinitionNotFound,
             Self::ResourceType => Error::ResourceTypeNotFound,
             Self::Resource => Error::ResourceNotFound,
             Self::Formula => Error::FormulaRevisionNotFound,
@@ -52,9 +59,10 @@ pub(crate) async fn fetch<T: DeserializeOwned>(
     id: i64,
 ) -> Result<T> {
     let sql = format!(
-        "SELECT {} FROM {} t WHERE tenant_id=$1 AND company_id=$2 AND id=$3",
+        "SELECT {} FROM {} t WHERE tenant_id=$1 AND company_id=$2 AND {}=$3",
         kind.projection(),
-        kind.table()
+        kind.table(),
+        kind.key()
     );
     let row = client
         .query_opt(&sql, &[&scope.tenant(), &company, &id])
@@ -73,6 +81,8 @@ pub(crate) async fn list<T: DeserializeOwned>(
 ) -> Result<Vec<T>> {
     let suffix = if product.is_some() {
         "AND product_id=$4 ORDER BY version"
+    } else if matches!(kind, Kind::Definition) {
+        "ORDER BY product_id"
     } else {
         "ORDER BY code"
     };
@@ -122,7 +132,7 @@ pub(crate) async fn next_version(
     product: i64,
 ) -> Result<i32> {
     // Publication already holds the company lock, shared with Inventory writes.
-    client.query_one("SELECT id FROM factory_products WHERE tenant_id=$1 AND company_id=$2 AND id=$3 FOR UPDATE", &[&scope.tenant(),&company,&product]).await?;
+    client.query_one("SELECT product_id FROM factory_product_definitions WHERE tenant_id=$1 AND company_id=$2 AND product_id=$3 FOR UPDATE", &[&scope.tenant(),&company,&product]).await?;
     let sql = format!(
         "SELECT COALESCE(max(version),0)+1 FROM {} WHERE tenant_id=$1 AND company_id=$2 AND product_id=$3",
         kind.table()
@@ -184,9 +194,9 @@ pub(crate) async fn insert<T: DeserializeOwned>(
     data: Value,
 ) -> Result<T> {
     let (columns, values) = match kind {
-        Kind::Product => (
-            "item_id,code,name",
-            "($3::jsonb->>'item_id')::bigint,$3::jsonb->>'code',$3::jsonb->>'name'",
+        Kind::Definition => (
+            "product_id,item_id",
+            "($3::jsonb->>'product_id')::bigint,($3::jsonb->>'item_id')::bigint",
         ),
         Kind::ResourceType => (
             "code,name,property_definitions",
@@ -206,9 +216,10 @@ pub(crate) async fn insert<T: DeserializeOwned>(
         ),
     };
     let sql = format!(
-        "INSERT INTO {} AS t (tenant_id,company_id,{columns}) VALUES($1,$2,{values}) RETURNING {},id",
+        "INSERT INTO {} AS t (tenant_id,company_id,{columns}) VALUES($1,$2,{values}) RETURNING {},{}",
         kind.table(),
-        kind.projection()
+        kind.projection(),
+        kind.key()
     );
     let tenant = scope.tenant();
     let value = tx

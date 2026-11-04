@@ -1,9 +1,11 @@
-//! Bilimbi.Factory.ProductDefinition.Contributions: the vocabulary, the two
-//! Factory menu items and the three page routes. Resource types has no menu
+//! Bilimbi.Factory.ProductDefinition.Contributions: the vocabulary, the
+//! Factory menu item, the two page routes and the Core product panel. Resource types has no menu
 //! item in Bilimbi either: the Resources page links to it.
 use bilibi_authz::{CapabilityDefinition as C, RoleDefinition, VocabularyContribution, VOCABULARY};
 use bilibi_menu::{MenuItem, Requirement};
-use bilibi_module_registry::contributions::{Access, Method, Route, ROUTES};
+use bilibi_module_registry::contributions::{
+    Access, Embed, EmbedContext, Method, Route, EMBEDS, ROUTES,
+};
 use bilibi_module_registry::{Contribution, Provenance};
 pub(crate) const VIEW: &str = "factory.product-definition.configuration.view";
 pub(crate) const MANAGE: &str = "factory.product-definition.configuration.manage";
@@ -23,19 +25,6 @@ bilibi_menu::contribute!(
         .requires(Requirement::Capability(VIEW))
         .order(60)
 );
-bilibi_menu::contribute!(
-    "factory/product_definition",
-    MenuItem::page(
-        "admin.factory.definitions",
-        "BOM formulas & routings",
-        "/factory/definitions"
-    )
-    .company_scoped()
-    .under("admin.factory")
-    .requires(Requirement::Capability(VIEW))
-    .order(70)
-);
-
 macro_rules! page_route {
     ($id:literal, $path:literal, $operation:literal) => {
         inventory::submit! { Contribution::new(ROUTES, $id, Provenance {
@@ -56,11 +45,16 @@ page_route!(
     "/factory/resources",
     "resources"
 );
-page_route!(
-    "factory/product_definition.definitions",
-    "/factory/definitions",
-    "definitions"
-);
+
+// Factory's panel on the one Core product page: the product's manufacturing
+// definition and its formula and routing revisions. There is no Factory
+// product list or menu item, because Core's Products is the one list.
+inventory::submit! { Contribution::new(EMBEDS,"factory/product_definition.product",Provenance {
+    module:"factory/product_definition",source:file!(),line:line!(),
+}, &Embed {
+    slot:"record.product", context:EmbedContext::Record {kind:"core/product"},
+    service:crate::PAGES, operation:"product-panel", access:Access::Capability(VIEW),
+}) }
 
 // ADR 01 gap, listed so it stays visible: these pages still write through
 // the Product Definition facade rather than an operation contract.

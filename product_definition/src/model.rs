@@ -3,19 +3,18 @@ use bilibi_factory_inventory::PropertyDefinition;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+/// The company's manufacturing facts for one Core product: which Inventory
+/// item it yields. The product's code, name and unit stay Core's.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Product {
-    pub id: i64,
+pub struct Definition {
+    pub product_id: i64,
     pub company_id: i64,
     pub item_id: i64,
-    pub code: String,
-    pub name: String,
 }
 #[derive(Clone, Debug, Default)]
-pub struct NewProduct {
+pub struct NewDefinition {
+    pub product_id: i64,
     pub item_id: i64,
-    pub code: String,
-    pub name: String,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ResourceType {
@@ -99,7 +98,7 @@ pub struct Operation {
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct SelectedRevisions {
-    pub product: Product,
+    pub definition: Definition,
     pub formula: FormulaRevision,
     pub routing: RoutingRevision,
 }

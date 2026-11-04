@@ -21,7 +21,7 @@ Definition's and Inventory's view and manage keys (a completion reads
 Product Definition and posts through Inventory).
 
 - `create_order(NewOrder)`: `code` (company-unique, at most 255 characters),
-  `kind` (`Order` or `Batch`), `product_id`, exact `formula_version` and
+  `kind` (`Order` or `Batch`), `product_id` (the Core product ID of a Product Definition definition), exact `formula_version` and
   `routing_version`, and an optional opaque `demand_ref`. The revisions are
   validated through `ProductDefinition::select_revisions` and retained on the
   order and on every execution.

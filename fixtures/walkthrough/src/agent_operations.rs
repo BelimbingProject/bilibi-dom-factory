@@ -98,17 +98,10 @@ async fn preview(plans: &Plans, who: &Actor, ops: &[PlannedOperation]) -> Result
 async fn commit(
     plans: &Plans,
     who: &Actor,
-    review: &Value,
+    _review: &Value,
     ops: &[PlannedOperation],
 ) -> Result<Value, bilibi_agent_api::Error> {
-    plans
-        .commit(
-            &who.scope,
-            &who.browser,
-            review["plan_code"].as_str().unwrap_or_default(),
-            ops,
-        )
-        .await
+    plans.commit(&who.scope, &who.browser, ops).await
 }
 async fn read(
     registry: &Registry,
@@ -785,17 +778,10 @@ async fn over_http(
     lot_id: i64,
 ) -> Result<(), Error> {
     println!("== over HTTP at {api}");
-    let access = app
-        .services
-        .get::<AgentAccess>("core/agent.grants")?;
+    let access = app.services.get::<AgentAccess>("core/agent.grants")?;
     let start = access.start_device(CLIENT_ID, "H5 walkthrough").await?;
     access
-        .decide(
-            &manager.scope,
-            &start.user_code,
-            Decision::Approve,
-            access.connection_expiry().await?,
-        )
+        .decide(&manager.scope, &start.user_code, Decision::Approve)
         .await?;
     // Time travel on the disposable row: the client may poll now.
     let db = app

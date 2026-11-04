@@ -12,6 +12,7 @@ bilibi-authz.workspace = true
 bilibi-company.workspace = true
 bilibi-database.workspace = true
 bilibi-menu.workspace = true
+bilibi-product.workspace = true
 bilibi-module-registry.workspace = true
 bilibi-tenancy.workspace = true
 bilibi-ui.workspace = true

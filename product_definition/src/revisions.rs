@@ -113,7 +113,8 @@ pub(crate) async fn formula(
     product: i64,
     attrs: &Value,
 ) -> Result<FormulaRevision> {
-    let product: Product = store::fetch(tx.sql(), scope, company, Kind::Product, product).await?;
+    let product: Definition =
+        store::fetch(tx.sql(), scope, company, Kind::Definition, product).await?;
     let lines = lines(&attrs["lines"])?;
     items(
         tx.sql(),
@@ -139,13 +140,14 @@ pub(crate) async fn formula(
         return Err(Error::ProductOutputMissing);
     }
     let config = config(attrs.get("process_config").unwrap_or(&json!({})))?;
-    let version = store::next_version(tx.sql(), scope, company, Kind::Formula, product.id).await?;
+    let version =
+        store::next_version(tx.sql(), scope, company, Kind::Formula, product.product_id).await?;
     store::insert(
         tx,
         scope,
         company,
         Kind::Formula,
-        json!({"product_id":product.id,"version":version,"lines":lines,"process_config":config}),
+        json!({"product_id":product.product_id,"version":version,"lines":lines,"process_config":config}),
     )
     .await
 }
@@ -157,7 +159,8 @@ pub(crate) async fn routing(
     product: i64,
     attrs: &Value,
 ) -> Result<RoutingRevision> {
-    let product: Product = store::fetch(tx.sql(), scope, company, Kind::Product, product).await?;
+    let product: Definition =
+        store::fetch(tx.sql(), scope, company, Kind::Definition, product).await?;
     let operations = operations(&attrs["operations"])?;
     items(
         tx.sql(),
@@ -185,11 +188,12 @@ pub(crate) async fn routing(
         }
     }
     let config = config(attrs.get("process_config").unwrap_or(&json!({})))?;
-    let version = store::next_version(tx.sql(), scope, company, Kind::Routing, product.id).await?;
-    store::insert(tx,scope,company,Kind::Routing,json!({"product_id":product.id,"version":version,"operations":operations,"process_config":config})).await
+    let version =
+        store::next_version(tx.sql(), scope, company, Kind::Routing, product.product_id).await?;
+    store::insert(tx,scope,company,Kind::Routing,json!({"product_id":product.product_id,"version":version,"operations":operations,"process_config":config})).await
 }
 pub(crate) fn compatible(
-    product: &Product,
+    product: &Definition,
     formula: &FormulaRevision,
     routing: &RoutingRevision,
 ) -> Result<()> {

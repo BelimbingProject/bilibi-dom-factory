@@ -148,6 +148,22 @@ pub(super) fn table(
     actions: bool,
     empty: (&str, &str),
 ) -> Result<Html> {
+    table_in("", id, event, caption, columns, rows, actions, empty)
+}
+
+/// The same list inside a mounted panel: `target` is the panel's root ID, which
+/// the host reads to send the table's events to the panel, not the page.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn table_in(
+    target: &str,
+    id: &str,
+    event: &str,
+    caption: &str,
+    columns: &ListColumns,
+    rows: Vec<FlexRow>,
+    actions: bool,
+    empty: (&str, &str),
+) -> Result<Html> {
     let none = rows.is_empty();
     let mut table = FlexTable::new(id, columns.flex_columns(), rows);
     table.zoom = columns.zoom;
@@ -155,6 +171,7 @@ pub(super) fn table(
     table.add_query = &columns.add_query;
     table.framed = false;
     table.event = event;
+    table.target = target;
     table.actions = actions;
     table.caption = caption;
     if none {

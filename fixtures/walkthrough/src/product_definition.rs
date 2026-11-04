@@ -5,18 +5,22 @@ use bilibi_authz::{
 };
 use bilibi_factory_inventory::{Inventory, MaterialTyping, NewItem, NewUnit, PropertyDefinition};
 use bilibi_factory_product_definition::{
-    NewProduct, NewResource, NewResourceType, ProductDefinition, ResourceTypeUpdate, ResourceUpdate,
+    NewDefinition, NewResource, NewResourceType, ProductDefinition, ResourceTypeUpdate,
+    ResourceUpdate,
 };
 use bilibi_tenancy::Scope;
 use serde_json::json;
 use std::fmt::Debug;
+
+#[path = "core_products.rs"]
+mod core_products;
 
 bilibi_walkthrough_fixture::walkthrough_vocabulary!();
 bilibi_walkthrough_fixture::walkthrough_module_roles!();
 bilibi_walkthrough_fixture::inventory::submit! { bilibi_walkthrough_fixture::registry::Contribution::new(VOCABULARY,"factory.xd1.roles",bilibi_walkthrough_fixture::registry::Provenance {module:"base/authz",source:file!(),line:line!()}, &VocabularyContribution {
     domains:&[],verbs:&[],capabilities:&[] as &[CapabilityDefinition],system_principals:&[],
     roles:&[
-        RoleDefinition {code:"manager",name:"manager",description:"Walkthrough fixture role",grant_all:false,capabilities:&["factory.product-definition.configuration.view","factory.product-definition.configuration.manage","factory.inventory.configuration.view","factory.inventory.configuration.manage","commerce.inventory.item.create","commerce.inventory.item.view"]},
+        RoleDefinition {code:"manager",name:"manager",description:"Walkthrough fixture role",grant_all:false,capabilities:&["factory.product-definition.configuration.view","factory.product-definition.configuration.manage","products.view","factory.inventory.configuration.view","factory.inventory.configuration.manage","commerce.inventory.item.create","commerce.inventory.item.view"]},
         RoleDefinition {code:"viewer",name:"viewer",description:"Walkthrough fixture role",grant_all:false,capabilities:&["factory.product-definition.configuration.view"]},
     ],
 }) }
@@ -72,13 +76,24 @@ async fn main() -> Result<(), Error> {
     let inventory = app
         .services
         .get::<Inventory>(bilibi_factory_inventory::SERVICE)?;
+    // Work follows an explicit desk: the viewer works at company 1, and the
+    // manager also at company 2 for the cross-company refusals, each by a desk.
+    db.get()
+        .await?
+        .batch_execute(
+            "INSERT INTO persons(id,tenant_id,name,code,kind,email) VALUES(4,1,'Lee Viewer','factory_viewer','human','lee@example.test') ON CONFLICT DO NOTHING;
+             UPDATE users SET person_id=4 WHERE tenant_id=1 AND id=2 AND person_id IS NULL;
+             INSERT INTO user_desks(tenant_id,person_id,company_id) SELECT 1,person_id,1 FROM users WHERE tenant_id=1 AND id=2 ON CONFLICT DO NOTHING;
+             INSERT INTO user_desks(tenant_id,person_id,company_id) SELECT 1,person_id,2 FROM users WHERE tenant_id=1 AND id=1 ON CONFLICT DO NOTHING;",
+        )
+        .await?;
     let manager = login(&app, "manager@example.test").await?;
     let viewer = login(&app, "viewer@example.test").await?;
     let staff = login(&app, "staff@example.test").await?;
     let other = login(&app, "manager@other.example.test").await?;
     let client = db.get().await?;
     if client
-        .query_one("SELECT count(*) FROM factory_products", &[])
+        .query_one("SELECT count(*) FROM factory_product_definitions", &[])
         .await?
         .get::<_, i64>(0)
         != 0
@@ -129,31 +144,95 @@ async fn main() -> Result<(), Error> {
     inventory
         .register_material(&manager, 1, input, unit.id, &MaterialTyping::default())
         .await?;
-    let new_product = NewProduct {
+    let tenant = manager.tenant();
+    let core = core_products::goods(&**client, tenant, "Mixed-case", "Fixture output").await?;
+    let new_definition = NewDefinition {
+        product_id: core,
         item_id: output,
-        code: "Mixed-case".into(),
-        name: "Fixture output".into(),
     };
-    let product = pd.create_product(&manager, 1, &new_product).await?;
-    verify("product code retains case", product.code == "Mixed-case")?;
+    let product = pd.create_definition(&manager, 1, &new_definition).await?;
+    verify(
+        "definition names the Core product",
+        product.product_id == core,
+    )?;
     refusal(
-        "duplicate product",
-        pd.create_product(&manager, 1, &new_product).await,
+        "duplicate definition",
+        pd.create_definition(&manager, 1, &new_definition).await,
         "already been taken",
+    )?;
+    let second = core_products::goods(&**client, tenant, "P-2", "Second").await?;
+    refusal(
+        "second definition for the same item",
+        pd.create_definition(
+            &manager,
+            1,
+            &NewDefinition {
+                product_id: second,
+                item_id: output,
+            },
+        )
+        .await,
+        "Item id has already been taken",
     )?;
     refusal(
         "missing item",
-        pd.create_product(
+        pd.create_definition(
             &manager,
             1,
-            &NewProduct {
+            &NewDefinition {
+                product_id: second,
                 item_id: i64::MAX,
-                code: "absent".into(),
-                name: "Absent".into(),
             },
         )
         .await,
         "Item not found",
+    )?;
+    refusal(
+        "missing Core product",
+        pd.create_definition(
+            &manager,
+            1,
+            &NewDefinition {
+                product_id: i64::MAX,
+                item_id: extra,
+            },
+        )
+        .await,
+        "Product not found",
+    )?;
+    let service = core_products::insert(&**client, tenant, "SVC-1", "Service", "service").await?;
+    refusal(
+        "a service is not made",
+        pd.create_definition(
+            &manager,
+            1,
+            &NewDefinition {
+                product_id: service,
+                item_id: extra,
+            },
+        )
+        .await,
+        "must be goods",
+    )?;
+    let retired = core_products::goods(&**client, tenant, "P-RET", "Retired").await?;
+    client
+        .execute(
+            "UPDATE core_products SET status='retired' WHERE id=$1",
+            &[&retired],
+        )
+        .await?;
+    refusal(
+        "a retired product takes no definition",
+        pd.create_definition(
+            &manager,
+            1,
+            &NewDefinition {
+                product_id: retired,
+                item_id: extra,
+            },
+        )
+        .await,
+        "is retired",
     )?;
 
     let definition = PropertyDefinition {
@@ -282,23 +361,25 @@ async fn main() -> Result<(), Error> {
     ],"process_config":{"process_family":"fixture","tolerances":{"quantity":"0.1"}}});
     let routing = json!({"operations":[{"code":"finish","sequence":7,"inputs":[input],"outputs":[output],"allowed_resource_ids":[resource.id]}]});
     let f1 = pd
-        .publish_formula(&manager, 1, product.id, &formula)
+        .publish_formula(&manager, 1, product.product_id, &formula)
         .await?;
     let r1 = pd
-        .publish_routing(&manager, 1, product.id, &routing)
+        .publish_routing(&manager, 1, product.product_id, &routing)
         .await?;
     verify(
         "first independent versions",
         f1.version == 1 && r1.version == 1 && f1.lines[0].quantity == "2.75",
     )?;
-    let selected = pd.select_revisions(&viewer, 1, product.id, 1, 1).await?;
+    let selected = pd
+        .select_revisions(&viewer, 1, product.product_id, 1, 1)
+        .await?;
     verify(
         "subset selection permits unused formula output",
         selected.formula == f1 && selected.routing == r1,
     )?;
     let (a, b) = tokio::join!(
-        pd.publish_formula(&manager, 1, product.id, &formula),
-        pd.publish_formula(&manager, 1, product.id, &formula)
+        pd.publish_formula(&manager, 1, product.product_id, &formula),
+        pd.publish_formula(&manager, 1, product.product_id, &formula)
     );
     let mut versions = vec![a?.version, b?.version];
     versions.sort();
@@ -308,14 +389,16 @@ async fn main() -> Result<(), Error> {
     )?;
     verify(
         "old version unchanged",
-        pd.get_formula_revision(&manager, 1, product.id, 1).await? == f1,
+        pd.get_formula_revision(&manager, 1, product.product_id, 1)
+            .await?
+            == f1,
     )?;
     let r2 = pd
-        .publish_routing(&manager, 1, product.id, &routing)
+        .publish_routing(&manager, 1, product.product_id, &routing)
         .await?;
     verify(
         "formula 1 with routing 2",
-        pd.select_revisions(&viewer, 1, product.id, 1, r2.version)
+        pd.select_revisions(&viewer, 1, product.product_id, 1, r2.version)
             .await?
             .routing
             .version
@@ -323,22 +406,24 @@ async fn main() -> Result<(), Error> {
     )?;
     refusal(
         "missing exact version",
-        pd.select_revisions(&manager, 1, product.id, 99, 1).await,
+        pd.select_revisions(&manager, 1, product.product_id, 99, 1)
+            .await,
         "Formula revision not found",
     )?;
     refusal(
         "zero version",
-        pd.get_routing_revision(&manager, 1, product.id, 0).await,
+        pd.get_routing_revision(&manager, 1, product.product_id, 0)
+            .await,
         "Routing revision not found",
     )?;
     let mut mismatch = routing.clone();
     mismatch["operations"][0]["inputs"] = json!([extra]);
     let mismatched = pd
-        .publish_routing(&manager, 1, product.id, &mismatch)
+        .publish_routing(&manager, 1, product.product_id, &mismatch)
         .await?;
     refusal(
         "routing/formula mismatch",
-        pd.select_revisions(&manager, 1, product.id, 1, mismatched.version)
+        pd.select_revisions(&manager, 1, product.product_id, 1, mismatched.version)
             .await,
         "Routing formula mismatch",
     )?;
@@ -362,7 +447,8 @@ async fn main() -> Result<(), Error> {
     ] {
         refusal(
             label,
-            pd.publish_formula(&manager, 1, product.id, &attrs).await,
+            pd.publish_formula(&manager, 1, product.product_id, &attrs)
+                .await,
             reason,
         )?;
     }
@@ -370,7 +456,7 @@ async fn main() -> Result<(), Error> {
     bad_config["process_config"] = json!({"unknown":1});
     refusal(
         "unknown process config",
-        pd.publish_formula(&manager, 1, product.id, &bad_config)
+        pd.publish_formula(&manager, 1, product.product_id, &bad_config)
             .await,
         "Invalid process config",
     )?;
@@ -381,7 +467,7 @@ async fn main() -> Result<(), Error> {
         .push(routing["operations"][0].clone());
     refusal(
         "duplicate operation",
-        pd.publish_routing(&manager, 1, product.id, &duplicate)
+        pd.publish_routing(&manager, 1, product.product_id, &duplicate)
             .await,
         "Invalid operations",
     )?;
@@ -389,23 +475,23 @@ async fn main() -> Result<(), Error> {
     missing_resource["operations"][0]["allowed_resource_ids"] = json!([i64::MAX]);
     refusal(
         "missing resource",
-        pd.publish_routing(&manager, 1, product.id, &missing_resource)
+        pd.publish_routing(&manager, 1, product.product_id, &missing_resource)
             .await,
         "Resource not found",
     )?;
     verify(
         "failed publication consumes no version",
-        pd.publish_formula(&manager, 1, product.id, &formula)
+        pd.publish_formula(&manager, 1, product.product_id, &formula)
             .await?
             .version
             == 4,
     )?;
-    observe("products", pd.list_products(&viewer, 1, None).await?);
+    observe("definitions", pd.list_definitions(&viewer, 1, None).await?);
     observe("types", pd.list_resource_types(&viewer, 1, None).await?);
     observe("resources", pd.list_resources(&viewer, 1, None).await?);
     verify(
         "bounded formula list",
-        pd.list_formula_revisions(&viewer, 1, product.id, Some(2))
+        pd.list_formula_revisions(&viewer, 1, product.product_id, Some(2))
             .await?
             .iter()
             .map(|f| f.version)
@@ -414,14 +500,14 @@ async fn main() -> Result<(), Error> {
     )?;
     verify(
         "routing list",
-        pd.list_routing_revisions(&viewer, 1, product.id, None)
+        pd.list_routing_revisions(&viewer, 1, product.product_id, None)
             .await?
             .len()
             == 3,
     )?;
     refusal(
         "staff read",
-        pd.list_products(&staff, 1, None).await,
+        pd.list_definitions(&staff, 1, None).await,
         "Access denied",
     )?;
     refusal(
@@ -432,13 +518,18 @@ async fn main() -> Result<(), Error> {
     )?;
     refusal(
         "other tenant",
-        pd.get_product(&other, 1, product.id).await,
+        pd.get_definition(&other, 1, product.product_id).await,
         "Not found",
     )?;
     refusal(
         "other company record",
-        pd.get_product(&manager, 2, product.id).await,
-        "Product not found",
+        pd.get_definition(&manager, 2, product.product_id).await,
+        "Product definition not found",
+    )?;
+    refusal(
+        "definition of a product not defined",
+        pd.get_definition(&manager, 1, i64::MAX).await,
+        "Product definition not found",
     )?;
     refusal(
         "resource type from other company",
@@ -491,14 +582,15 @@ async fn main() -> Result<(), Error> {
     retired_unit["lines"][0]["unit_id"] = json!(spare_unit.id);
     refusal(
         "retired unit publication",
-        pd.publish_formula(&manager, 1, product.id, &retired_unit)
+        pd.publish_formula(&manager, 1, product.product_id, &retired_unit)
             .await,
         "Unit retired",
     )?;
     inventory.retire_material(&manager, 1, input).await?;
     refusal(
         "retired material publication",
-        pd.publish_formula(&manager, 1, product.id, &formula).await,
+        pd.publish_formula(&manager, 1, product.product_id, &formula)
+            .await,
         "Material retired",
     )?;
     pd.retire_resource(&manager, 1, resource.id).await?;
@@ -506,7 +598,7 @@ async fn main() -> Result<(), Error> {
     retired_resource["operations"][0]["inputs"] = json!([]);
     refusal(
         "retired resource publication",
-        pd.publish_routing(&manager, 1, product.id, &retired_resource)
+        pd.publish_routing(&manager, 1, product.product_id, &retired_resource)
             .await,
         "Resource retired",
     )?;
@@ -546,7 +638,7 @@ async fn main() -> Result<(), Error> {
     )?;
     verify(
         "history remains selectable after retirement",
-        pd.select_revisions(&viewer, 1, product.id, 1, 2)
+        pd.select_revisions(&viewer, 1, product.product_id, 1, 2)
             .await?
             .formula
             == f1,
@@ -588,7 +680,8 @@ async fn main() -> Result<(), Error> {
             },
         )
         .await,
-        "archived",
+        // An archived company is no longer a work target for a desk.
+        "Access denied",
     )?;
     client
         .execute(
@@ -596,7 +689,7 @@ async fn main() -> Result<(), Error> {
             &[],
         )
         .await?;
-    let rows=client.query("SELECT auditable_type,event,count(*) FROM base_audit_mutations WHERE auditable_type IN ('factory_products','factory_resources','factory_resource_types','factory_formula_revisions','factory_routing_revisions') GROUP BY 1,2 ORDER BY 1,2",&[]).await?;
+    let rows=client.query("SELECT auditable_type,event,count(*) FROM base_audit_mutations WHERE auditable_type IN ('factory_product_definitions','factory_resources','factory_resource_types','factory_formula_revisions','factory_routing_revisions') GROUP BY 1,2 ORDER BY 1,2",&[]).await?;
     for row in rows {
         println!(
             "audit: {} {} {}",
