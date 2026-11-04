@@ -1,7 +1,7 @@
 //! H6 runtime proof through real authenticated registry/plans and optional
 //! HTTP/MCP edges. No unit-test harness or production data. Run once against
 //! a freshly migrated disposable database; plan codes and tokens stay private.
-use bilibi_agent_access::{
+use bilibi_agent::{
     AgentAccess, AuthorizeParams, ClientRegistration, CodeExchange, Decision, CLIENT_ID,
 };
 use bilibi_agent_api::{
@@ -733,7 +733,7 @@ async fn over_http(
     }
     let access = app
         .services
-        .get::<AgentAccess>("core/agent_access.grants")?;
+        .get::<AgentAccess>("core/agent.grants")?;
     let start = access.start_device(CLIENT_ID, "H6 walkthrough").await?;
     access
         .decide(
@@ -832,7 +832,7 @@ async fn over_http(
         response_type: "code".into(),
         resource: resource.into(),
         scope: None,
-        code_challenge: bilibi_agent_access::code_challenge(verifier),
+        code_challenge: bilibi_agent::code_challenge(verifier),
         code_challenge_method: "S256".into(),
         state: None,
     };
