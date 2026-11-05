@@ -19,11 +19,11 @@ inventory::submit! { Contribution::new(VOCABULARY,"factory/product_definition",P
 
 bilibi_menu::contribute!(
     "factory/product_definition",
-    MenuItem::page("admin.factory.resources", "Resources", "/factory/resources")
+    MenuItem::page("production.resources", "Resources", "/factory/resources")
         .company_scoped()
-        .under("admin.factory")
+        .under("production")
         .requires(Requirement::Capability(VIEW))
-        .order(60)
+        .order(30)
 );
 macro_rules! page_route {
     ($id:literal, $path:literal, $operation:literal) => {

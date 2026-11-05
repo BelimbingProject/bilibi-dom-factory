@@ -89,7 +89,7 @@ from the same fixture folder. It installs the fixture accounts, one unit and two
 items, and serves the composed app; sign in at `http://localhost:3020` (use
 `localhost`, the origin the session cookie is issued for) as
 `manager@example.test` (manages) or `viewer@example.test` (reads), password
-`bilibi-dev`, and open Administration → Factory → Resources, or
+`bilibi-dev`, and open Production → Resources, or
 `/factory/resource-types`. Create a goods product on Administration → Products
 and open it to use the Factory panel for its formulas and routings.
 
