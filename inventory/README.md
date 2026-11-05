@@ -308,9 +308,11 @@ strings (the first is the default); a currency is three upper-case letters.
 
 ## Menu
 
-The root `admin.factory` ("Factory", under Administration) and its items Units
-(`/factory/units`) and Materials (`/factory/materials`), each needing
-`factory.inventory.configuration.view`.
+Materials (`/factory/materials`) sits under Production, and the `production.settings`
+group ("Settings", under Production) holds Units (`/factory/units`); each needs
+`factory.inventory.configuration.view`. Resources (Product Definition) also sits under
+Production, and Wastage reasons, Labour roles and Measurement types (Production
+Execution) sit under Settings.
 
 ## Pages
 

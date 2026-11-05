@@ -55,26 +55,26 @@ inventory::submit! { Contribution::new(VOCABULARY, "factory/inventory", provenan
 
 bilibi_menu::contribute!(
     "factory/inventory",
-    MenuItem::container("admin.factory", "Factory")
-        .icon("building-office-2")
-        .under("admin")
-        .order(80)
+    MenuItem::container("production.settings", "Settings")
+        .icon("cog-6-tooth")
+        .under("production")
+        .order(90)
 );
 bilibi_menu::contribute!(
     "factory/inventory",
-    MenuItem::page("admin.factory.units", "Units", "/factory/units")
+    MenuItem::page("production.settings.units", "Units", "/factory/units")
         .company_scoped()
-        .under("admin.factory")
+        .under("production.settings")
         .requires(Requirement::Capability(CONFIGURATION_VIEW))
         .order(20)
 );
 bilibi_menu::contribute!(
     "factory/inventory",
-    MenuItem::page("admin.factory.materials", "Materials", "/factory/materials")
+    MenuItem::page("production.materials", "Materials", "/factory/materials")
         .company_scoped()
-        .under("admin.factory")
+        .under("production")
         .requires(Requirement::Capability(CONFIGURATION_VIEW))
-        .order(5)
+        .order(20)
 );
 
 const TENANT_OR_COMPANY: &[ScopeKind] = &[ScopeKind::Tenant, ScopeKind::Company];

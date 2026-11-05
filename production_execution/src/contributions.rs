@@ -53,12 +53,12 @@ inventory::submit! { Contribution::new(
 bilibi_menu::contribute!(
     "factory/production_execution",
     bilibi_menu::MenuItem::page(
-        "admin.factory.wastage-reasons",
+        "production.settings.wastage-reasons",
         "Wastage reasons",
         "/factory/wastage-reasons"
     )
     .company_scoped()
-    .under("admin.factory")
+    .under("production.settings")
     .requires(bilibi_menu::Requirement::Capability(VIEW))
     .order(80)
 );
@@ -75,12 +75,12 @@ inventory::submit! { Contribution::new(
 bilibi_menu::contribute!(
     "factory/production_execution",
     bilibi_menu::MenuItem::page(
-        "admin.factory.labour-roles",
+        "production.settings.labour-roles",
         "Labour roles",
         "/factory/labour-roles"
     )
     .company_scoped()
-    .under("admin.factory")
+    .under("production.settings")
     .requires(bilibi_menu::Requirement::Capability(VIEW))
     .order(85)
 );
@@ -97,12 +97,12 @@ inventory::submit! { Contribution::new(
 bilibi_menu::contribute!(
     "factory/production_execution",
     bilibi_menu::MenuItem::page(
-        "admin.factory.measurement-types",
+        "production.settings.measurement-types",
         "Measurement types",
         "/factory/measurement-types"
     )
     .company_scoped()
-    .under("admin.factory")
+    .under("production.settings")
     .requires(bilibi_menu::Requirement::Capability(VIEW))
     .order(90)
 );
