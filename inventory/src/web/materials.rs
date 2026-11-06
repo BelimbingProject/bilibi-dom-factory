@@ -51,11 +51,6 @@ fn properties(json: &str) -> std::result::Result<Map<String, Value>, crate::Erro
     }
 }
 
-fn optional(value: &str) -> Option<String> {
-    let value = value.trim();
-    (!value.is_empty()).then(|| value.to_owned())
-}
-
 impl Materials {
     pub(super) async fn open(ctx: &Ctx<'_>) -> Result<Self> {
         let mut page = Self {
@@ -213,9 +208,13 @@ impl Materials {
                             let item = NewItem {
                                 sku: form.sku.clone(),
                                 title: form.title.clone(),
-                                status: optional(&form.status),
-                                description: optional(&form.description),
-                                currency_code: optional(&form.currency_code),
+                                status: bilibi_ui::params::blank_to_none(Some(&form.status)),
+                                description: bilibi_ui::params::blank_to_none(Some(
+                                    &form.description,
+                                )),
+                                currency_code: bilibi_ui::params::blank_to_none(Some(
+                                    &form.currency_code,
+                                )),
                                 ..NewItem::default()
                             };
                             inventory
@@ -245,9 +244,9 @@ impl Materials {
                     let item = ItemUpdate {
                         title: Some(form.title.clone()),
                         description: Some(form.description.clone()),
-                        status: optional(&form.status),
+                        status: bilibi_ui::params::blank_to_none(Some(&form.status)),
                         notes: None,
-                        currency_code: optional(&form.currency_code),
+                        currency_code: bilibi_ui::params::blank_to_none(Some(&form.currency_code)),
                     };
                     inventory
                         .update_material(ctx.scope, ctx.company, id, &item, &properties)
