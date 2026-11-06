@@ -53,11 +53,6 @@ fn inventory() -> Outcome<&'static Arc<Inventory>> {
         .ok_or(Refusal::Backend(bilibi_database::Error::Internal))
 }
 
-fn invalid(field: impl Into<String>, message: impl Into<String>) -> Refusal {
-    let mut fields: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    fields.insert(field.into(), vec![message.into()]);
-    Refusal::InvalidInput(fields)
-}
 /// An access failure keeps its kind (the plan reports a denial as a missing
 /// capability); every refusal that is the input's own is an invalid input
 /// carrying the text a person sees, under the field it concerns.
@@ -75,10 +70,12 @@ fn refuse(error: Error) -> Refusal {
             }
             Refusal::InvalidInput(fields)
         }
-        Error::CompanyNotFound | Error::CompanyArchived => invalid("company_id", text),
-        Error::RequestIdConflict => invalid("request_id", text),
-        Error::TransactionNotFound => invalid("transaction_id", text),
-        _ => invalid("request", text),
+        Error::CompanyNotFound | Error::CompanyArchived => {
+            bilibi_agent_api::invalid("company_id", text)
+        }
+        Error::RequestIdConflict => bilibi_agent_api::invalid("request_id", text),
+        Error::TransactionNotFound => bilibi_agent_api::invalid("transaction_id", text),
+        _ => bilibi_agent_api::invalid("request", text),
     }
 }
 
@@ -86,7 +83,7 @@ fn integer(input: &Value, field: &str) -> Outcome<i64> {
     input[field]
         .as_i64()
         .filter(|value| *value > 0)
-        .ok_or_else(|| invalid(field, "must be a positive integer"))
+        .ok_or_else(|| bilibi_agent_api::invalid(field, "must be a positive integer"))
 }
 fn optional(input: &Value, field: &str) -> Outcome<Option<i64>> {
     match &input[field] {
@@ -291,7 +288,7 @@ impl ReadHandler for Read {
                     let trace = match input["direction"].as_str() {
                         Some("backward") => inventory.trace_backward(scope, company, id).await,
                         Some("forward") => inventory.trace_forward(scope, company, id).await,
-                        _ => return Err(invalid("direction", "must be backward or forward")),
+                        _ => return Err(bilibi_agent_api::invalid("direction", "must be backward or forward")),
                     };
                     trace_json(&trace.map_err(refuse)?)
                 }
@@ -329,16 +326,17 @@ fn parse_posting(input: &Value) -> Outcome<PostingRequest> {
     if !input["receipt_measurement"].is_null() {
         request.receipt_measurement = Some(
             serde_json::from_value(input["receipt_measurement"].clone()).map_err(|error| {
-                invalid("receipt_measurement", format!("is not valid: {error}"))
+                bilibi_agent_api::invalid("receipt_measurement", format!("is not valid: {error}"))
             })?,
         );
     }
     let lines = input["lines"]
         .as_array()
-        .ok_or_else(|| invalid("lines", "must be a list of lines"))?;
+        .ok_or_else(|| bilibi_agent_api::invalid("lines", "must be a list of lines"))?;
     for (index, line) in lines.iter().enumerate() {
-        let line: StockLine = serde_json::from_value(line.clone())
-            .map_err(|error| invalid(format!("lines.{index}"), format!("is not valid: {error}")))?;
+        let line: StockLine = serde_json::from_value(line.clone()).map_err(|error| {
+            bilibi_agent_api::invalid(&format!("lines.{index}"), format!("is not valid: {error}"))
+        })?;
         request.lines.push(line);
     }
     Ok(request)
@@ -356,7 +354,9 @@ async fn effective(
             client
                 .query_one("SELECT $1::text::timestamptz", &[&text])
                 .await
-                .map_err(|_| invalid("effective_at", "is not a valid date and time"))?
+                .map_err(|_| {
+                    bilibi_agent_api::invalid("effective_at", "is not a valid date and time")
+                })?
                 .get(0),
         )),
     }
@@ -478,8 +478,8 @@ enum Write {
 }
 fn new_location(input: &Value) -> NewLocation {
     NewLocation {
-        code: input["code"].as_str().unwrap_or_default().to_owned(),
-        name: input["name"].as_str().unwrap_or_default().to_owned(),
+        code: bilibi_agent_api::text_field(input, "code"),
+        name: bilibi_agent_api::text_field(input, "name"),
     }
 }
 impl WriteHandler for Write {

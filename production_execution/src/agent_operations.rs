@@ -15,7 +15,6 @@ use bilibi_module_registry::{Contribution, Provenance};
 use bilibi_tenancy::Scope;
 use serde_json::{json, Value};
 use std::{
-    collections::BTreeMap,
     sync::{Arc, OnceLock},
     time::SystemTime,
 };
@@ -34,9 +33,6 @@ fn owner() -> Result<&'static ProductionExecution> {
         .map(Arc::as_ref)
         .ok_or(Refusal::Backend(bilibi_database::Error::Internal))
 }
-fn invalid(field: impl Into<String>, message: impl Into<String>) -> Refusal {
-    Refusal::InvalidInput(BTreeMap::from([(field.into(), vec![message.into()])]))
-}
 fn refuse(error: Error) -> Refusal {
     match error {
         Error::Access(error) => Refusal::Backend(error),
@@ -44,19 +40,16 @@ fn refuse(error: Error) -> Refusal {
         | Error::ProductDefinition(bilibi_factory_product_definition::Error::Access(error)) => {
             Refusal::Backend(error)
         }
-        Error::RequestIdConflict => invalid("request_id", error.to_string()),
+        Error::RequestIdConflict => bilibi_agent_api::invalid("request_id", error.to_string()),
         Error::ImportNotAuthorized | Error::HoldOverrideDenied => Refusal::Forbidden,
-        _ => invalid("request", error.to_string()),
+        _ => bilibi_agent_api::invalid("request", error.to_string()),
     }
 }
 fn id(input: &Value, field: &str) -> Result<i64> {
     input[field]
         .as_i64()
         .filter(|id| *id > 0)
-        .ok_or_else(|| invalid(field, "must be a positive integer"))
-}
-fn text(input: &Value, field: &str) -> String {
-    input[field].as_str().unwrap_or_default().into()
+        .ok_or_else(|| bilibi_agent_api::invalid(field, "must be a positive integer"))
 }
 fn instant(at: SystemTime) -> String {
     jiff::Timestamp::try_from(at)
@@ -68,18 +61,18 @@ fn time(input: &Value, field: &str) -> Result<SystemTime> {
         .as_str()
         .and_then(|s| s.parse::<jiff::Timestamp>().ok())
         .map(SystemTime::from)
-        .ok_or_else(|| invalid(field, "must be a date-time with offset"))
+        .ok_or_else(|| bilibi_agent_api::invalid(field, "must be a date-time with offset"))
 }
 fn new_order(input: &Value) -> Result<NewOrder> {
     Ok(NewOrder {
-        code: text(input, "code"),
-        kind: OrderKind::parse(&text(input, "kind"))
-            .ok_or_else(|| invalid("kind", "must be order or batch"))?,
+        code: bilibi_agent_api::text_field(input, "code"),
+        kind: OrderKind::parse(&bilibi_agent_api::text_field(input, "kind"))
+            .ok_or_else(|| bilibi_agent_api::invalid("kind", "must be order or batch"))?,
         product_id: id(input, "product_id")?,
         formula_version: i32::try_from(id(input, "formula_version")?)
-            .map_err(|_| invalid("formula_version", "is too large"))?,
+            .map_err(|_| bilibi_agent_api::invalid("formula_version", "is too large"))?,
         routing_version: i32::try_from(id(input, "routing_version")?)
-            .map_err(|_| invalid("routing_version", "is too large"))?,
+            .map_err(|_| bilibi_agent_api::invalid("routing_version", "is too large"))?,
         demand_ref: input["demand_ref"].as_str().map(str::to_owned),
     })
 }
@@ -87,17 +80,22 @@ fn completion(input: &Value) -> Result<(Source, Completion)> {
     let source = match input["source"].as_str() {
         Some("live") => Source::Live,
         Some("import") => Source::Import,
-        _ => return Err(invalid("source", "must be live or import")),
+        _ => {
+            return Err(bilibi_agent_api::invalid(
+                "source",
+                "must be live or import",
+            ))
+        }
     };
     let parse = |field: &str| {
         serde_json::from_value(input[field].clone())
-            .map_err(|error| invalid(field, format!("is not valid: {error}")))
+            .map_err(|error| bilibi_agent_api::invalid(field, format!("is not valid: {error}")))
     };
     let hold_override = input
         .get("hold_override")
         .map(|hold| -> Result<_> {
             Ok(HoldOverrideRequest {
-                reason: text(hold, "reason"),
+                reason: bilibi_agent_api::text_field(hold, "reason"),
                 evidence: hold["evidence"].as_str().map(str::to_owned),
                 occurred_at: hold
                     .get("occurred_at")
@@ -106,8 +104,9 @@ fn completion(input: &Value) -> Result<(Source, Completion)> {
                 approver: hold
                     .get("approver")
                     .map(|v| {
-                        serde_json::from_value::<Approver>(v.clone())
-                            .map_err(|e| invalid("hold_override.approver", e.to_string()))
+                        serde_json::from_value::<Approver>(v.clone()).map_err(|e| {
+                            bilibi_agent_api::invalid("hold_override.approver", e.to_string())
+                        })
                     })
                     .transpose()?,
             })
@@ -116,23 +115,23 @@ fn completion(input: &Value) -> Result<(Source, Completion)> {
     Ok((
         source,
         Completion {
-            request_id: text(input, "request_id"),
-            operation_code: text(input, "operation_code"),
+            request_id: bilibi_agent_api::text_field(input, "request_id"),
+            operation_code: bilibi_agent_api::text_field(input, "operation_code"),
             resource_id: id(input, "resource_id")?,
-            operator_type: text(input, "operator_type"),
+            operator_type: bilibi_agent_api::text_field(input, "operator_type"),
             operator_id: input["operator_id"]
                 .as_i64()
-                .ok_or_else(|| invalid("operator_id", "must be an integer"))?,
+                .ok_or_else(|| bilibi_agent_api::invalid("operator_id", "must be an integer"))?,
             started_at: time(input, "started_at")?,
             completed_at: time(input, "completed_at")?,
-            evidence: text(input, "evidence"),
+            evidence: bilibi_agent_api::text_field(input, "evidence"),
             inputs: parse("inputs")?,
             outputs: parse("outputs")?,
             variance: input
                 .get("variance")
                 .map(|v| {
                     serde_json::from_value(v.clone())
-                        .map_err(|e| invalid("variance", e.to_string()))
+                        .map_err(|e| bilibi_agent_api::invalid("variance", e.to_string()))
                 })
                 .transpose()?,
             hold_override,
@@ -270,7 +269,7 @@ impl Write {
                             .await
                             .map_err(|e| refuse(e.into()))?;
                         if unit != material.native_unit.id && line.conversion_version.is_none() {
-                            return Err(invalid(
+                            return Err(bilibi_agent_api::invalid(
                                 "conversion_version",
                                 "pin the conversion version for every non-native unit",
                             ));
