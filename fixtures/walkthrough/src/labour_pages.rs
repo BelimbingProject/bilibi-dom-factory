@@ -216,7 +216,7 @@ async fn main() -> Result<(), Error> {
                 &admin,
                 manager.user(),
                 "factory.production-execution.configuration.manage",
-                Some(false),
+                Some(bilibi_authz::grants::Direct::Deny),
             )
             .await?;
         let denied = event(
@@ -234,7 +234,9 @@ async fn main() -> Result<(), Error> {
                 &admin,
                 manager.user(),
                 "factory.production-execution.configuration.manage",
-                Some(true),
+                Some(bilibi_authz::grants::Direct::Allow(
+                    bilibi_authz::Reach::All,
+                )),
             )
             .await?;
     }
@@ -323,7 +325,9 @@ async fn main() -> Result<(), Error> {
             &admin,
             manager.user(),
             "factory.production-execution.labour.manage",
-            Some(true),
+            Some(bilibi_authz::grants::Direct::Allow(
+                bilibi_authz::Reach::All,
+            )),
         )
         .await?;
     let body = event(
@@ -482,7 +486,7 @@ async fn main() -> Result<(), Error> {
             &admin,
             manager.user(),
             "factory.production-execution.labour.manage",
-            Some(false),
+            Some(bilibi_authz::grants::Direct::Deny),
         )
         .await?;
     let denied = event(
@@ -501,7 +505,9 @@ async fn main() -> Result<(), Error> {
             &admin,
             manager.user(),
             "factory.production-execution.labour.manage",
-            Some(true),
+            Some(bilibi_authz::grants::Direct::Allow(
+                bilibi_authz::Reach::All,
+            )),
         )
         .await?;
     event(

@@ -421,7 +421,14 @@ async fn main() -> Result<(), Error> {
         denials(&db, OVERRIDE).await? == denied + 1 && before == counts(&db).await?,
     )?;
     grants
-        .set_direct(&admin.scope, manager.scope.user(), OVERRIDE, Some(true))
+        .set_direct(
+            &admin.scope,
+            manager.scope.user(),
+            OVERRIDE,
+            Some(bilibi_authz::grants::Direct::Allow(
+                bilibi_authz::Reach::All,
+            )),
+        )
         .await?;
     let ops = [op(COMPLETE, live.clone())];
     let before = counts(&db).await?;
@@ -494,7 +501,12 @@ async fn main() -> Result<(), Error> {
             && holds[0]["source_transaction_id"] == receipt.id,
     )?;
     grants
-        .set_direct(&admin.scope, manager.scope.user(), OVERRIDE, Some(false))
+        .set_direct(
+            &admin.scope,
+            manager.scope.user(),
+            OVERRIDE,
+            Some(bilibi_authz::grants::Direct::Deny),
+        )
         .await?;
     let before = counts(&db).await?;
     let replay = run(&plans, &manager, &ops).await?;
@@ -506,7 +518,14 @@ async fn main() -> Result<(), Error> {
     conflict["evidence"] = json!("different");
     reject(&plans, &manager, COMPLETE, conflict, "Request id conflict").await?;
     grants
-        .set_direct(&admin.scope, manager.scope.user(), OVERRIDE, Some(true))
+        .set_direct(
+            &admin.scope,
+            manager.scope.user(),
+            OVERRIDE,
+            Some(bilibi_authz::grants::Direct::Allow(
+                bilibi_authz::Reach::All,
+            )),
+        )
         .await?;
     let mut unpinned = live.clone();
     unpinned["request_id"] = json!("h6-unpinned");
@@ -543,7 +562,14 @@ async fn main() -> Result<(), Error> {
     )?;
     for cap in [IMPORT, OVERRIDE] {
         grants
-            .set_direct(&admin.scope, manager.scope.user(), cap, Some(true))
+            .set_direct(
+                &admin.scope,
+                manager.scope.user(),
+                cap,
+                Some(bilibi_authz::grants::Direct::Allow(
+                    bilibi_authz::Reach::All,
+                )),
+            )
             .await?;
     }
     // Each grant is rechecked when committing an already reviewed new write.
@@ -551,7 +577,12 @@ async fn main() -> Result<(), Error> {
         let ops = [op(COMPLETE, imported.clone())];
         let review = preview(&plans, &manager, &ops).await?;
         grants
-            .set_direct(&admin.scope, manager.scope.user(), cap, Some(false))
+            .set_direct(
+                &admin.scope,
+                manager.scope.user(),
+                cap,
+                Some(bilibi_authz::grants::Direct::Deny),
+            )
             .await?;
         let before = counts(&db).await?;
         verify(
@@ -559,7 +590,14 @@ async fn main() -> Result<(), Error> {
             commit(&plans, &manager, &review, &ops).await.is_err() && before == counts(&db).await?,
         )?;
         grants
-            .set_direct(&admin.scope, manager.scope.user(), cap, Some(true))
+            .set_direct(
+                &admin.scope,
+                manager.scope.user(),
+                cap,
+                Some(bilibi_authz::grants::Direct::Allow(
+                    bilibi_authz::Reach::All,
+                )),
+            )
             .await?;
     }
     let done = run(&plans, &manager, &[op(COMPLETE, imported.clone())]).await?;
@@ -579,11 +617,23 @@ async fn main() -> Result<(), Error> {
             && holds[0]["evidence"] == "source log",
     )?;
     grants
-        .set_direct(&admin.scope, manager.scope.user(), IMPORT, Some(false))
+        .set_direct(
+            &admin.scope,
+            manager.scope.user(),
+            IMPORT,
+            Some(bilibi_authz::grants::Direct::Deny),
+        )
         .await?;
     reject(&plans, &manager, COMPLETE, imported, "missing_capability").await?;
     grants
-        .set_direct(&admin.scope, manager.scope.user(), IMPORT, Some(true))
+        .set_direct(
+            &admin.scope,
+            manager.scope.user(),
+            IMPORT,
+            Some(bilibi_authz::grants::Direct::Allow(
+                bilibi_authz::Reach::All,
+            )),
+        )
         .await?;
 
     // Real individually feasible completions that overdraw together must

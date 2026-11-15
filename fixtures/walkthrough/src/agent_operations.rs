@@ -550,7 +550,7 @@ async fn main() -> Result<(), Error> {
             &admin.scope,
             manager.scope.user(),
             "factory.inventory.configuration.manage",
-            Some(false),
+            Some(bilibi_authz::grants::Direct::Deny),
         )
         .await?;
     let revoked = commit(&plans, &manager, &review, &ops).await;

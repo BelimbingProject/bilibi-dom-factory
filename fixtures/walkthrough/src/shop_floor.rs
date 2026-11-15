@@ -100,7 +100,9 @@ async fn main() -> Result<(), Error> {
                 &admin,
                 manager.user(),
                 &format!("factory.production-execution.{suffix}"),
-                Some(true),
+                Some(bilibi_authz::grants::Direct::Allow(
+                    bilibi_authz::Reach::All,
+                )),
             )
             .await?;
     }
@@ -110,7 +112,7 @@ async fn main() -> Result<(), Error> {
             &admin,
             manager.user(),
             "factory.production-execution.labour.manage",
-            Some(false),
+            Some(bilibi_authz::grants::Direct::Deny),
         )
         .await?;
     let order: i64 = c.query_one("SELECT id FROM factory_production_orders WHERE tenant_id=$1 AND company_id=1 AND code='ORD-1'", &[&admin.tenant()]).await?.get(0);

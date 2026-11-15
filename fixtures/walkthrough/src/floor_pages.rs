@@ -448,7 +448,14 @@ async fn main() -> Result<(), Error> {
         "commerce.inventory.item.view",
     ] {
         grants
-            .set_direct(&admin, viewer.user(), key, Some(true))
+            .set_direct(
+                &admin,
+                viewer.user(),
+                key,
+                Some(bilibi_authz::grants::Direct::Allow(
+                    bilibi_authz::Reach::All,
+                )),
+            )
             .await?;
     }
     let mut view = mount(&page, &viewer, &query).await?;
@@ -470,7 +477,7 @@ async fn main() -> Result<(), Error> {
             &admin,
             manager.user(),
             "factory.production-execution.measurement.record",
-            Some(false),
+            Some(bilibi_authz::grants::Direct::Deny),
         )
         .await?;
     let body = event(
@@ -490,7 +497,9 @@ async fn main() -> Result<(), Error> {
             &admin,
             manager.user(),
             "factory.production-execution.measurement.record",
-            Some(true),
+            Some(bilibi_authz::grants::Direct::Allow(
+                bilibi_authz::Reach::All,
+            )),
         )
         .await?;
     // Disposable-only fixture change simulates the company being archived by
