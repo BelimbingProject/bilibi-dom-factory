@@ -80,7 +80,14 @@ pub(super) async fn run(
         "factory.production-execution.wastage.correct",
     ] {
         grants
-            .set_direct(admin, manager.user(), capability, Some(true))
+            .set_direct(
+                admin,
+                manager.user(),
+                capability,
+                Some(bilibi_authz::grants::Direct::Allow(
+                    bilibi_authz::Reach::All,
+                )),
+            )
             .await?;
     }
     let reason = pe

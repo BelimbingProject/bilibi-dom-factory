@@ -541,7 +541,12 @@ async fn main() -> Result<(), Error> {
     let grants = app.services.get::<Grants>("base/authz.grants")?;
     let manage = "factory.product-definition.configuration.manage";
     grants
-        .set_direct(&admin, manager.user(), manage, Some(false))
+        .set_direct(
+            &admin,
+            manager.user(),
+            manage,
+            Some(bilibi_authz::grants::Direct::Deny),
+        )
         .await?;
     refusal(
         "grant revoked after session creation",
