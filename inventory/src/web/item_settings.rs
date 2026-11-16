@@ -74,7 +74,8 @@ impl ItemSettings {
     }
 
     async fn save(&mut self, ctx: &Ctx<'_>, value: &Value) -> Result<()> {
-        let posted = params::form_values(value, "settings");
+        let posted = params::form_values_checked(value, "settings", params::FIELD_LIMIT)
+            .map_err(bilibi_database::Error::refused)?;
         let form = Form {
             statuses: posted.get("statuses").cloned().unwrap_or_default(),
             currency: posted.get("currency").cloned().unwrap_or_default(),

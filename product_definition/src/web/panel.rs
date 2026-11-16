@@ -169,11 +169,11 @@ impl ProductPanel {
             "clear-flash" => return Ok(()),
             // Each table raises its own event, so its columns are the ones touched.
             "grid_formulas" => {
-                s::grid(&mut self.formulas_columns, payload);
+                s::grid(&mut self.formulas_columns, payload)?;
                 return Ok(());
             }
             "grid_routings" => {
-                s::grid(&mut self.routings_columns, payload);
+                s::grid(&mut self.routings_columns, payload)?;
                 return Ok(());
             }
             "create_definition" | "publish_formula" | "publish_routing" => {}
@@ -193,7 +193,7 @@ impl ProductPanel {
     }
 
     async fn create_definition(&mut self, scope: &Scope, payload: &Value) -> Result<()> {
-        let posted = s::form(payload, PRODUCT);
+        let posted = s::form(payload, PRODUCT)?;
         let draft = s::pick(&posted, "item_id");
         let Some(company) = s::company(scope) else {
             self.definition_draft = draft;
@@ -239,7 +239,7 @@ impl ProductPanel {
         } else {
             (ROUTING, "operations")
         };
-        let posted = s::form(payload, form);
+        let posted = s::form(payload, form)?;
         let draft = Draft {
             values: [s::pick(&posted, first), s::pick(&posted, "process_config")],
         };
@@ -384,7 +384,6 @@ impl ProductPanel {
     }
 
     /// One revision card: its table, then the publish form when allowed.
-    #[allow(clippy::too_many_arguments)]
     fn revisions_card(&self, formula: bool, rows: Vec<FlexRow>) -> Result<Html> {
         let (id, noun, columns, draft, form_id, event, label, hint, button) = if formula {
             (

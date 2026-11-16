@@ -140,10 +140,10 @@ impl Floor {
     pub(super) async fn labour_event(&mut self, scope: &Scope, p: &Value) -> Result<bool> {
         let kind = s::text(p, "type");
         if kind == "labour_grid" {
-            let _ = self
-                .labour
-                .columns
-                .handle(&bilibi_ui::params::string_values(p));
+            let _ = self.labour.columns.handle(
+                &bilibi_ui::params::string_values_checked(p, bilibi_ui::params::FIELD_LIMIT)
+                    .map_err(bilibi_database::Error::refused)?,
+            );
             return Ok(true);
         }
         if kind == "cancel_labour_correction" {
@@ -181,7 +181,7 @@ impl Floor {
             return Ok(true);
         }
         if kind == "change_labour" {
-            self.labour.clock.extend(s::form(p, "labour"));
+            self.labour.clock.extend(s::form(p, "labour")?);
             return Ok(true);
         }
         if kind == "start_labour_correction" {
@@ -219,7 +219,7 @@ impl Floor {
         let pe = &self.pages.execution;
         let (result, message) = match kind {
             "clock_in" => {
-                self.labour.clock.extend(s::form(p, "labour"));
+                self.labour.clock.extend(s::form(p, "labour")?);
                 let d = &self.labour.clock;
                 let Some(role) = bilibi_ui::params::positive_id(Some(s::get(d, "role_id"))) else {
                     self.error = Some("Choose a labour role.".into());
@@ -241,7 +241,7 @@ impl Floor {
                 (pe.clock_out(scope, company, id).await, "Clocked out.")
             }
             "save_labour_entry" => {
-                self.labour.entry.extend(s::form(p, "entry"));
+                self.labour.entry.extend(s::form(p, "entry")?);
                 let d = &self.labour.entry;
                 let (Some(start), Some(stop)) = (
                     time::parse(&self.display, s::get(d, "started_at")),
@@ -259,7 +259,7 @@ impl Floor {
             _ => {
                 self.labour
                     .correction
-                    .extend(s::form(p, "labour_correction"));
+                    .extend(s::form(p, "labour_correction")?);
                 let d = &self.labour.correction;
                 let Some(row) = &self.labour.correcting else {
                     self.error = Some("Labour entry not found.".into());

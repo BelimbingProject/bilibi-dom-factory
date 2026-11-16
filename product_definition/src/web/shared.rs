@@ -134,8 +134,15 @@ pub(super) fn mount_columns(id: &str, builtins: Vec<BuiltinColumn>) -> Result<Li
 
 /// The grid events of a flex table. No Product Definition column sorts, so
 /// the outcome has no sort to answer.
-pub(super) fn grid(columns: &mut ListColumns, payload: &serde_json::Value) {
-    let _ = columns.handle(&bilibi_ui::params::string_values(payload));
+pub(super) fn grid(
+    columns: &mut ListColumns,
+    payload: &serde_json::Value,
+) -> bilibi_database::Result<()> {
+    let _ = columns.handle(
+        &bilibi_ui::params::string_values_checked(payload, bilibi_ui::params::FIELD_LIMIT)
+            .map_err(bilibi_database::Error::refused)?,
+    );
+    Ok(())
 }
 
 /// One list, framed by its card as Bilimbi's `table framed={false}`.
@@ -153,7 +160,6 @@ pub(super) fn table(
 
 /// The same list inside a mounted panel: `target` is the panel's root ID, which
 /// the host reads to send the table's events to the panel, not the page.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn table_in(
     target: &str,
     id: &str,
@@ -190,8 +196,12 @@ pub(super) fn id(payload: &serde_json::Value) -> Option<i64> {
     bilibi_ui::params::positive_id(text(payload, "id"))
 }
 
-pub(super) fn form(payload: &serde_json::Value, name: &str) -> HashMap<String, String> {
-    bilibi_ui::params::form_values(payload, name)
+pub(super) fn form(
+    payload: &serde_json::Value,
+    name: &str,
+) -> bilibi_database::Result<HashMap<String, String>> {
+    bilibi_ui::params::form_values_checked(payload, name, bilibi_ui::params::FIELD_LIMIT)
+        .map_err(bilibi_database::Error::refused)
 }
 
 /// Pretty JSON with keys in order, as Bilimbi's `Jason.encode!(pretty: true)`.

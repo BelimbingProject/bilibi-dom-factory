@@ -268,7 +268,6 @@ fn editor(card: &str, title: &str, form: &str, submit: &str, fields: Vec<Html>) 
 }
 
 /// A list of rows in a flexible table inside a card with no padding of its own.
-#[allow(clippy::too_many_arguments)]
 fn list(
     card: &str,
     table: &str,
@@ -301,9 +300,13 @@ fn list(
 }
 
 /// A flex table's own `grid` event (column settings, row height).
-fn grid(columns: &mut ListColumns, value: &Value) {
+fn grid(columns: &mut ListColumns, value: &Value) -> Result<()> {
     // No column of these lists sorts, so only the arrangement can change.
-    let _: ColumnsOutcome = columns.handle(&params::string_values(value));
+    let _: ColumnsOutcome = columns.handle(
+        &params::string_values_checked(value, params::FIELD_LIMIT)
+            .map_err(bilibi_database::Error::refused)?,
+    );
+    Ok(())
 }
 
 fn confirm(id: &str, consequence: &str, confirm: &str, working: &str) -> Result<Html> {
