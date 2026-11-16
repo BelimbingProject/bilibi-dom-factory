@@ -62,7 +62,11 @@ macro_rules! audited {
 }
 
 impl ProductDefinition {
-    async fn read_client(&self, scope: &Scope, company: i64) -> Result<bilibi_database::Connection> {
+    async fn read_client(
+        &self,
+        scope: &Scope,
+        company: i64,
+    ) -> Result<bilibi_database::Connection> {
         let client = self.db.get().await.map_err(bilibi_database::Error::from)?;
         bilibi_company::authorize_work_target(&**client, scope, company, contributions::VIEW)
             .await?;
