@@ -59,7 +59,11 @@ pub struct ProductionExecution {
 impl ProductionExecution {
     /// A pooled connection for a read, after the view capability and a live
     /// company are proven.
-    async fn read_client(&self, scope: &Scope, company: i64) -> Result<deadpool_postgres::Object> {
+    async fn read_client(
+        &self,
+        scope: &Scope,
+        company: i64,
+    ) -> Result<bilibi_database::Connection> {
         let client = self.db.get().await.map_err(bilibi_database::Error::from)?;
         bilibi_company::authorize_work_target(&**client, scope, company, contributions::FLOOR_VIEW)
             .await?;
