@@ -29,8 +29,9 @@ pub(super) fn id(value: &Value, key: &str) -> Option<i64> {
         .filter(|v| *v > 0)
         .or_else(|| bilibi_ui::params::positive_id(value[key].as_str()))
 }
-pub(super) fn form(value: &Value, name: &str) -> HashMap<String, String> {
-    bilibi_ui::params::form_values(value, name)
+pub(super) fn form(value: &Value, name: &str) -> bilibi_database::Result<HashMap<String, String>> {
+    bilibi_ui::params::form_values_checked(value, name, bilibi_ui::params::FIELD_LIMIT)
+        .map_err(bilibi_database::Error::refused)
 }
 pub(super) fn get<'a>(draft: &'a HashMap<String, String>, key: &str) -> &'a str {
     draft.get(key).map(String::as_str).unwrap_or("")

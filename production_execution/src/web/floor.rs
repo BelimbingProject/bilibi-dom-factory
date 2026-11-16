@@ -344,15 +344,17 @@ impl Floor {
         let kind = s::text(p, "type");
         match kind {
             "wastage_grid" => {
-                let _ = self
-                    .waste_columns
-                    .handle(&bilibi_ui::params::string_values(p));
+                let _ = self.waste_columns.handle(
+                    &bilibi_ui::params::string_values_checked(p, bilibi_ui::params::FIELD_LIMIT)
+                        .map_err(bilibi_database::Error::refused)?,
+                );
                 return Ok(());
             }
             "measurement_grid" => {
-                let _ = self
-                    .measure_columns
-                    .handle(&bilibi_ui::params::string_values(p));
+                let _ = self.measure_columns.handle(
+                    &bilibi_ui::params::string_values_checked(p, bilibi_ui::params::FIELD_LIMIT)
+                        .map_err(bilibi_database::Error::refused)?,
+                );
                 return Ok(());
             }
             "pick_order" | "pick_run" | "back_to_orders" | "back_to_runs" => {
@@ -420,8 +422,8 @@ impl Floor {
                     .insert("measurement_type_id".into(), s::text(p, "id").into());
                 self.measure_draft.insert("value".into(), String::new());
             }
-            "change_wastage" => self.waste_draft.extend(s::form(p, "wastage")),
-            "change_measurement" => self.measure_draft.extend(s::form(p, "measurement")),
+            "change_wastage" => self.waste_draft.extend(s::form(p, "wastage")?),
+            "change_measurement" => self.measure_draft.extend(s::form(p, "measurement")?),
             "start_correction" => {
                 self.correction = self
                     .wastage
@@ -472,7 +474,7 @@ impl Floor {
         let pe = &self.pages.execution;
         let (result, message) = match kind {
             "save_wastage" => {
-                self.waste_draft.extend(s::form(p, "wastage"));
+                self.waste_draft.extend(s::form(p, "wastage")?);
                 let d = &self.waste_draft;
                 let Some(line) = self.lines.iter().find(|l| l.key == s::get(d, "line")) else {
                     self.error = Some("Choose the material that was scrapped.".into());
@@ -490,7 +492,7 @@ impl Floor {
                 )
             }
             "save_wastage_correction" => {
-                self.correction_draft.extend(s::form(p, "correction"));
+                self.correction_draft.extend(s::form(p, "correction")?);
                 let d = &self.correction_draft;
                 let Some(id) = self.correction.as_ref().and_then(|v| s::id(v, "id")) else {
                     self.error = Some("Wastage record not found.".into());
@@ -503,7 +505,7 @@ impl Floor {
                 )
             }
             "save_measurement" => {
-                self.measure_draft.extend(s::form(p, "measurement"));
+                self.measure_draft.extend(s::form(p, "measurement")?);
                 let d = &self.measure_draft;
                 let Some(ty) = self.types.iter().find(|t| {
                     t["id"].as_i64()
@@ -520,7 +522,7 @@ impl Floor {
             }
             _ => {
                 self.measure_correction_draft
-                    .extend(s::form(p, "measurement_correction"));
+                    .extend(s::form(p, "measurement_correction")?);
                 let d = &self.measure_correction_draft;
                 let Some(row) = &self.measure_correction else {
                     self.error = Some("Measurement not found.".into());

@@ -116,8 +116,8 @@ impl Conversions {
 
     pub(super) async fn event(&mut self, ctx: &Ctx<'_>, value: &Value) -> Result<()> {
         match event(value)? {
-            "grid_materials" => grid(&mut self.material_columns, value),
-            "grid_versions" => grid(&mut self.version_columns, value),
+            "grid_materials" => grid(&mut self.material_columns, value)?,
+            "grid_versions" => grid(&mut self.version_columns, value)?,
             "clear-flash" => self.notice.flash = None,
             "select" => {
                 if !ctx.can_view().await? {
@@ -149,7 +149,8 @@ impl Conversions {
     }
 
     async fn save(&mut self, ctx: &Ctx<'_>, value: &Value) -> Result<()> {
-        let posted = params::form_values(value, "conversion");
+        let posted = params::form_values_checked(value, "conversion", params::FIELD_LIMIT)
+            .map_err(bilibi_database::Error::refused)?;
         let form = Form {
             unit_id: posted.get("unit_id").cloned().unwrap_or_default(),
             factor: posted.get("factor").cloned().unwrap_or_default(),

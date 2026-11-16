@@ -114,7 +114,7 @@ impl Materials {
 
     pub(super) async fn event(&mut self, ctx: &Ctx<'_>, value: &Value) -> Result<()> {
         match event(value)? {
-            "grid" => grid(&mut self.columns, value),
+            "grid" => grid(&mut self.columns, value)?,
             "clear-flash" => self.notice.flash = None,
             "cancel" => {
                 self.edit = Edit::Closed;
@@ -182,7 +182,8 @@ impl Materials {
     }
 
     async fn save(&mut self, ctx: &Ctx<'_>, value: &Value) -> Result<()> {
-        let posted = params::form_values(value, "material");
+        let posted = params::form_values_checked(value, "material", params::FIELD_LIMIT)
+            .map_err(bilibi_database::Error::refused)?;
         let get = |key: &str| posted.get(key).cloned().unwrap_or_default();
         let form = Form {
             sku: get("sku"),

@@ -58,7 +58,7 @@ impl Units {
 
     pub(super) async fn event(&mut self, ctx: &Ctx<'_>, value: &Value) -> Result<()> {
         match event(value)? {
-            "grid" => grid(&mut self.columns, value),
+            "grid" => grid(&mut self.columns, value)?,
             "clear-flash" => self.notice.flash = None,
             "cancel" => {
                 self.edit = Edit::Closed;
@@ -109,7 +109,8 @@ impl Units {
     }
 
     async fn save(&mut self, ctx: &Ctx<'_>, value: &Value) -> Result<()> {
-        let posted = params::form_values(value, "unit");
+        let posted = params::form_values_checked(value, "unit", params::FIELD_LIMIT)
+            .map_err(bilibi_database::Error::refused)?;
         let form = Form {
             code: posted.get("code").cloned().unwrap_or_default(),
             name: posted.get("name").cloned().unwrap_or_default(),

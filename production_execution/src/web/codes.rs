@@ -160,7 +160,10 @@ impl Codes {
             return Ok(());
         }
         if event == "grid" {
-            let _ = self.columns.handle(&bilibi_ui::params::string_values(p));
+            let _ = self.columns.handle(
+                &bilibi_ui::params::string_values_checked(p, bilibi_ui::params::FIELD_LIMIT)
+                    .map_err(bilibi_database::Error::refused)?,
+            );
             return Ok(());
         }
         if event == "cancel" {
@@ -209,7 +212,7 @@ impl Codes {
                 }
             }
             "save_entry" => {
-                self.draft.extend(s::form(p, self.kind.form()));
+                self.draft.extend(s::form(p, self.kind.form())?);
                 let mut attrs = json!({"label":s::get(&self.draft,"label")});
                 if self.kind.measurement() {
                     for key in ["minimum", "maximum", "target"] {

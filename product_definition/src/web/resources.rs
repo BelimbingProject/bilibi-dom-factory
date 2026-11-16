@@ -102,7 +102,7 @@ impl Resources {
         match kind {
             "clear-flash" => return Ok(()),
             "grid" => {
-                s::grid(&mut self.columns, payload);
+                s::grid(&mut self.columns, payload)?;
                 return Ok(());
             }
             "cancel" => {
@@ -169,7 +169,7 @@ impl Resources {
     }
 
     async fn save(&mut self, scope: &Scope, company: Option<i64>, payload: &Value) -> Result<()> {
-        let posted = s::form(payload, FORM);
+        let posted = s::form(payload, FORM)?;
         let draft = Draft {
             code: s::pick(&posted, "code"),
             name: s::pick(&posted, "name"),
