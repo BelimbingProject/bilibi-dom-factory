@@ -300,7 +300,7 @@ fn positive(quantity: &str) -> bool {
 }
 
 impl Completer {
-    async fn read_client(&self) -> Result<deadpool_postgres::Object> {
+    async fn read_client(&self) -> Result<bilibi_database::Connection> {
         Ok(self.db.get().await.map_err(bilibi_database::Error::from)?)
     }
 

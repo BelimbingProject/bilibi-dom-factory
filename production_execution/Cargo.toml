@@ -22,7 +22,6 @@ bilibi-tenancy.workspace = true
 bilibi-user.workspace = true
 bilibi-factory-inventory = { path = "../inventory" }
 bilibi-factory-product-definition = { path = "../product_definition" }
-deadpool-postgres.workspace = true
 inventory.workspace = true
 rust_decimal.workspace = true
 serde.workspace = true

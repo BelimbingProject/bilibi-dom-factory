@@ -100,7 +100,7 @@ impl ProductionExecution {
         scope: &Scope,
         company: i64,
         import: Option<&ProductionImport<'_>>,
-    ) -> Result<deadpool_postgres::Object> {
+    ) -> Result<bilibi_database::Connection> {
         if let Some(import) = import {
             let client = self.db.get().await.map_err(bilibi_database::Error::from)?;
             import.authorize_on(&**client).await?;
