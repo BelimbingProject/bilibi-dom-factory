@@ -86,6 +86,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     let listener = tokio::net::TcpListener::bind(bind).await?;
     println!("Factory browser sweep listening at {origin}/factory/materials");
-    axum::serve(listener, bilibi_web::router(app)).await?;
+    axum::serve(listener, bilibi_web::staff_router(app)).await?;
     Ok(())
 }

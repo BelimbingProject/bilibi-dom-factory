@@ -546,7 +546,7 @@ async fn main() -> Result<(), Error> {
         let bind = std::env::var("BIND_ADDR")?;
         let listener = tokio::net::TcpListener::bind(&bind).await?;
         println!("Floor browser proof listening at {origin}/factory/floor?order={order}&run={run}");
-        axum::serve(listener, bilibi_web::router(app)).await?;
+        axum::serve(listener, bilibi_web::staff_router(app)).await?;
     }
     Ok(())
 }
