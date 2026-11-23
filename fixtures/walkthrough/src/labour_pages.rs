@@ -560,7 +560,7 @@ async fn main() -> Result<(), Error> {
     if std::env::var("BILIBI_FLOOR_SERVE").as_deref() == Ok("yes") {
         let listener = tokio::net::TcpListener::bind(std::env::var("BIND_ADDR")?).await?;
         println!("Browser proof listening at {origin}/factory/floor?order={order}&run={run}");
-        axum::serve(listener, bilibi_web::router(app)).await?;
+        axum::serve(listener, bilibi_web::staff_router(app)).await?;
     }
     Ok(())
 }

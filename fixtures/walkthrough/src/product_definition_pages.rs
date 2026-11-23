@@ -84,6 +84,6 @@ async fn main() -> Result<(), Error> {
     let bind = std::env::var("BIND_ADDR")?;
     let listener = tokio::net::TcpListener::bind(bind).await?;
     println!("Product Definition pages at {origin}");
-    axum::serve(listener, bilibi_web::router(app)).await?;
+    axum::serve(listener, bilibi_web::staff_router(app)).await?;
     Ok(())
 }
