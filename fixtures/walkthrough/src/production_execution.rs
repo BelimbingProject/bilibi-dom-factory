@@ -569,11 +569,21 @@ async fn main() -> Result<(), Error> {
         "Request id conflict",
     )?;
     let race = blend("run-race", aged_2);
+    let other_live = {
+        let pe = pe.clone();
+        let scope = manager.clone();
+        let request = race.clone();
+        let order_id = order.id;
+        tokio::spawn(async move {
+            pe.complete_operation(&scope, 1, order_id, Source::Live, &request)
+                .await
+        })
+    };
     let (a, b) = tokio::join!(
-        pe.complete_operation(&manager, 1, order.id, Source::Live, &race),
+        other_live,
         pe.complete_operation(&manager, 1, order.id, Source::Live, &race),
     );
-    let (a, b) = (a?, b?);
+    let (a, b) = (a??, b?);
     verify(
         "concurrent identical retries record one execution",
         a.id == b.id && count("factory_operation_executions").await? == 2,
@@ -1635,11 +1645,21 @@ async fn main() -> Result<(), Error> {
         }],
         ..blend("existing-output-transform", aged)
     };
+    let other_import = {
+        let pe = pe.clone();
+        let scope = admin.clone();
+        let request = addition.clone();
+        let order_id = order.id;
+        tokio::spawn(async move {
+            pe.complete_operation(&scope, 1, order_id, Source::Import, &request)
+                .await
+        })
+    };
     let (left, right) = tokio::join!(
-        pe.complete_operation(&admin, 1, order.id, Source::Import, &addition),
+        other_import,
         pe.complete_operation(&admin, 1, order.id, Source::Import, &addition),
     );
-    let (added, retried) = (left?, right?);
+    let (added, retried) = (left??, right?);
     let addition_posting = inventory
         .get_transaction(&manager, 1, added.inventory_transaction_id)
         .await?;
