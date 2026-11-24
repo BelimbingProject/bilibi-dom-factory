@@ -247,13 +247,8 @@ async fn main() -> Result<(), Error> {
             &manager,
             1,
             &NewDefinition {
-                product_id: core_products::goods(
-                    &**db.get().await?,
-                    manager.tenant(),
-                    "P-1",
-                    "Product one",
-                )
-                .await?,
+                product_id: core_products::goods(&**client, manager.tenant(), "P-1", "Product one")
+                    .await?,
                 item_id: product_item,
             },
         )
@@ -292,7 +287,7 @@ async fn main() -> Result<(), Error> {
             1,
             &NewDefinition {
                 product_id: core_products::goods(
-                    &**db.get().await?,
+                    &**client,
                     manager.tenant(),
                     "P-RULE",
                     "Rule product",
