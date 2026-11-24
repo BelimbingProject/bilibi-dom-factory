@@ -1,3 +1,4 @@
+use bilibi_agent_api::{Handler, Registry};
 use bilibi_database::{Error, MutationBoundary};
 use bilibi_factory_product_definition::ProductDefinition;
 use bilibi_factory_production_execution::Order;
@@ -94,6 +95,50 @@ pub(super) async fn run(
         .await?;
     let reprint = download.0.serve(request(viewer)).await?;
     std::fs::write(folder.join("work-traveller-reprint.pdf"), &reprint.bytes)?;
+    let registry = app.services.get::<Registry>("base/agent_api.registry")?;
+    let key = "factory.production_execution.traveller";
+    let current = registry
+        .read(
+            &app.db,
+            admin,
+            "base.templates.print.get",
+            &json!({"key":key,"company_id":1,"language":"ms"}),
+        )
+        .await?;
+    let print = &current["result"]["print"];
+    let mut layout: serde_json::Value = serde_json::from_str(
+        print["effective"]["layout"]
+            .as_str()
+            .ok_or("missing traveller layout")?,
+    )?;
+    layout["paper"] = json!("letter");
+    let input = json!({
+        "key":key, "company_id":1, "language":"ms", "layout":layout.to_string(), "review":print["review"]
+    });
+    let operation = "base.templates.print.publish";
+    let Handler::SafeWrite(publish) = registry.operations[operation].definition.handler else {
+        return Err("print publication did not use a reviewed write".into());
+    };
+    let mut client = app.db.get().await?;
+    let mut tx = boundary
+        .begin(&mut client, admin.mutation_context(operation))
+        .await?;
+    publish.preview(tx.sql(), admin, &input).await?;
+    publish.commit(&mut tx, admin, &input).await?;
+    let company = viewer.current_company().ok_or("viewer has no company")?;
+    settings
+        .put(
+            &mut tx,
+            admin,
+            Target::Company(company),
+            "templates.language",
+            json!("ms"),
+        )
+        .await?;
+    tx.commit().await?;
+    drop(client);
+    let malay = download.0.serve(request(viewer)).await?;
+    std::fs::write(folder.join("work-traveller-ms.pdf"), &malay.bytes)?;
     println!("Travellers printed from order {} before and after the newer routing; the other tenant was refused.", order.id);
     Ok(())
 }
