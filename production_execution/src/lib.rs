@@ -21,6 +21,9 @@ mod measurements;
 mod model;
 mod orders;
 mod outcomes;
+mod traveller;
+mod traveller_layout;
+mod traveller_pdf;
 mod wastage;
 mod web;
 pub use error::Error;
@@ -30,6 +33,7 @@ pub use model::{
     Order, OrderKind, Source,
 };
 pub use outcomes::{ProductionTrace, RunYield, TraceOrder, TraceRun, UnitYield, YieldBalance};
+pub use traveller::{WorkInstruction, WorkPlan};
 
 const PAGES: &str = "factory/production_execution.pages";
 pub const SERVICE: &str = "factory/production_execution.production_execution";
@@ -125,7 +129,7 @@ impl ProductionExecution {
         )
         .await?;
         bilibi_company::require_writable(tx.sql(), scope, company, true).await?;
-        if source == Source::Import {
+        let picked = if source == Source::Import {
             let import = self
                 .completer
                 .inventory
@@ -138,7 +142,7 @@ impl ProductionExecution {
                     new.formula_version,
                     new.routing_version,
                 )
-                .await?;
+                .await?
         } else {
             self.product_definition
                 .select_revisions_on(
@@ -149,8 +153,8 @@ impl ProductionExecution {
                     new.formula_version,
                     new.routing_version,
                 )
-                .await?;
-        }
+                .await?
+        };
         let field = |field, message| Error::Invalid { field, message };
         if new.code.trim().is_empty() {
             return Err(field("Code", "can't be blank"));
@@ -176,6 +180,10 @@ impl ProductionExecution {
             {
                 return Err(field("Code", "has already been taken"));
             }
+        let traveller = serde_json::to_value(
+            self.freeze_traveller(tx.sql(), scope, company, picked, &new.work_plan)
+                .await?,
+        )?;
         let tenant = scope.tenant();
         let new = new.clone();
         let id = tx
@@ -183,8 +191,8 @@ impl ProductionExecution {
                     Box::pin(async move {
                         let row = sql
                             .query_one(
-                                "INSERT INTO factory_production_orders(tenant_id,company_id,code,kind,product_id,formula_version,routing_version,demand_ref) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id,to_jsonb(factory_production_orders) AS saved",
-                                &[&tenant, &company, &new.code, &new.kind.name(), &new.product_id, &new.formula_version, &new.routing_version, &new.demand_ref],
+                                "INSERT INTO factory_production_orders(tenant_id,company_id,code,kind,product_id,formula_version,routing_version,demand_ref,traveller) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id,to_jsonb(factory_production_orders) AS saved",
+                                &[&tenant, &company, &new.code, &new.kind.name(), &new.product_id, &new.formula_version, &new.routing_version, &new.demand_ref, &traveller],
                             )
                             .await?;
                         let id: i64 = row.get("id");
@@ -332,10 +340,11 @@ impl ProductionExecution {
 
 inventory::submit! { Module {
     id: "factory/production_execution", layer: Layer::Domains,
-    dependencies: &["base/agent_api","base/authz","base/database","base/datetime","base/locale","base/menu","base/module_registry","base/tenancy","base/ui","core/company","core/user","factory/inventory","factory/product_definition"],
+    dependencies: &["base/agent_api","base/artifacts","base/branding","base/party_ids","base/settings","base/templates","base/authz","base/database","base/datetime","base/locale","base/menu","base/module_registry","base/tenancy","base/ui","core/company","core/user","factory/inventory","factory/product_definition"],
     migrations: &[("factory-production-execution-001-orders-executions",include_str!("../migrations/001-orders-executions.sql")),
         ("factory-production-execution-002-shop-floor-capture",include_str!("../migrations/002-shop-floor-capture.sql")),
-        ("factory-production-execution-003-execution-range-index",include_str!("../migrations/003-execution-range-index.sql"))],
+        ("factory-production-execution-003-execution-range-index",include_str!("../migrations/003-execution-range-index.sql")),
+        ("factory-production-execution-004-traveller",include_str!("../migrations/003-traveller.sql"))],
     services: &[Service { id:SERVICE, factory: |services| {
         let db = services.get::<Db>("base/database.pool")?.as_ref().clone();
         let mutations: Arc<MutationBoundary> = services.get("base/database.mutations")?;
@@ -349,6 +358,16 @@ inventory::submit! { Module {
         });
         agent_operations::bind(owner.clone())?;
         Ok(owner)
+    } }, Service { id: traveller_pdf::SERVICE, factory: |services| {
+        Ok(Arc::new(bilibi_ui::download::DownloadService::<Scope, bilibi_database::Error>(
+            Arc::new(traveller_pdf::TravellerDownload {
+                production: services.get(SERVICE)?,
+                artifacts: services.get("base/artifacts.store")?,
+                branding: services.get(bilibi_branding::SERVICE)?,
+                templates: services.get(bilibi_templates::SERVICE)?,
+                settings: services.get("base/settings.store")?,
+            })
+        )))
     } }, Service { id:PAGES, factory: |services| Ok(Arc::new(bilibi_ui::page::PageService::<Scope, bilibi_database::Error>(Arc::new(web::Pages {
         db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
         execution: services.get(SERVICE)?,

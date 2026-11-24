@@ -38,6 +38,7 @@ pub struct Order {
     pub formula_version: i32,
     pub routing_version: i32,
     pub demand_ref: Option<String>,
+    pub(crate) traveller: crate::traveller::Traveller,
 }
 
 /// Attributes of a new order. `demand_ref` is an opaque reference to the
@@ -50,6 +51,7 @@ pub struct NewOrder {
     pub formula_version: i32,
     pub routing_version: i32,
     pub demand_ref: Option<String>,
+    pub work_plan: crate::traveller::WorkPlan,
 }
 
 /// Where a completion came from. An import needs the import capability.

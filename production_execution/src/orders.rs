@@ -8,7 +8,7 @@ use bilibi_tenancy::Scope;
 use tokio_postgres::{GenericClient, Row};
 
 pub(crate) const ORDER_COLUMNS: &str =
-    "id,company_id,code,kind,product_id,formula_version,routing_version,demand_ref";
+    "id,company_id,code,kind,product_id,formula_version,routing_version,demand_ref,traveller";
 pub(crate) const EXECUTION_COLUMNS: &str = "id,company_id,order_id,request_id,request_fingerprint,source,operation_code,resource_id,operator_type,operator_id,started_at,completed_at,inputs,outputs,variance,evidence,inventory_transaction_id,formula_version,routing_version";
 
 fn source(name: &str) -> Result<Source> {
@@ -29,6 +29,7 @@ pub(crate) fn order(row: &Row) -> Result<Order> {
         formula_version: row.get("formula_version"),
         routing_version: row.get("routing_version"),
         demand_ref: row.get("demand_ref"),
+        traveller: serde_json::from_value(row.get("traveller"))?,
     })
 }
 

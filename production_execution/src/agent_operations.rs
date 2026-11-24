@@ -74,6 +74,14 @@ fn new_order(input: &Value) -> Result<NewOrder> {
         routing_version: i32::try_from(id(input, "routing_version")?)
             .map_err(|_| bilibi_agent_api::invalid("routing_version", "is too large"))?,
         demand_ref: input["demand_ref"].as_str().map(str::to_owned),
+        work_plan: input
+            .get("work_plan")
+            .filter(|plan| !plan.is_null())
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|_| bilibi_agent_api::invalid("work_plan", "is invalid"))?
+            .unwrap_or_default(),
     })
 }
 fn completion(input: &Value) -> Result<(Source, Completion)> {
@@ -141,7 +149,7 @@ fn completion(input: &Value) -> Result<(Source, Completion)> {
 fn order_json(order: &Order) -> Value {
     json!({"id":order.id,"company_id":order.company_id,"code":order.code,"kind":order.kind,
         "product_id":order.product_id,"formula_version":order.formula_version,
-        "routing_version":order.routing_version,"demand_ref":order.demand_ref})
+        "routing_version":order.routing_version,"demand_ref":order.demand_ref,"work_plan":order.traveller})
 }
 fn execution_json(run: &Execution) -> Value {
     json!({"id":run.id,"company_id":run.company_id,"order_id":run.order_id,"request_id":run.request_id,
@@ -468,7 +476,13 @@ fn order_input() -> Value {
         json!({
         "company_id":ident(),"code":{"type":"string","maxLength":255},"kind":{"type":"string","enum":["order","batch"]},
         "product_id":ident(),"formula_version":{"type":"integer","minimum":1,"maximum":2147483647},
-        "routing_version":{"type":"integer","minimum":1,"maximum":2147483647},"demand_ref":{"type":"string","maxLength":255}}),
+        "routing_version":{"type":"integer","minimum":1,"maximum":2147483647},"demand_ref":{"type":"string","maxLength":255},"work_plan":{"type":"object","properties":{
+            "target_quantity":{"type":"string","maxLength":37},"target_unit_id":ident(),
+            "due_on":{"type":"string","maxLength":10},
+            "instructions":{"type":"array","items":{"type":"object","required":["operation","instructions"],"properties":{
+                "operation":{"type":"string","maxLength":255},"instructions":{"type":"string","maxLength":12000}
+            }}}
+        }}}),
     )
 }
 fn dimension() -> Value {

@@ -179,6 +179,12 @@ The XP2 executable checks code normalization/immutability/deactivation, wastage 
 
 Timestamps use Base Datetime's display policy and shared timestamp component. `src/web/time.rs` is the private company-time entry contract: company/local display reads entered wall time in the company zone; UTC display reads UTC. A daylight-saving gap is refused and a fold picks the earlier instant. An unchanged minute input keeps the original seconds and subsecond precision.
 
+The selected order's **Print traveller** action opens a private PDF. The order snapshot keeps its order reference, product identity, formula and routing versions, operation codes in routing sequence, and any demand reference. The reviewed order creation operation also accepts an optional `work_plan` with an exact `target_quantity` and active `target_unit_id` together, `due_on` as a calendar date, and `instructions` keyed by operation code. It freezes the unit code and each instruction when it saves the order. Editing a product routing does not change existing orders or their travellers.
+
+English and Bahasa Melayu layouts ship with the module. Layout revisions use Base Templates and render offline through Base Artifacts. The PDF uses the selected company's language and the floor's existing viewing permission.
+
+For the focused PDF proof, set `FACTORY_TRAVELLER_PROOF_DIR` to a private output directory and `FACTORY_TRAVELLER_CHROMIUM` to the Chromium executable when running `production-execution` on a disposable database. It prints the original traveller and a reprint after publishing a renamed routing, and checks that a different tenant cannot render either.
+
 ### Page proof
 
 On a disposable migrated database, run the existing `production-execution` and `shop-floor` walkthrough binaries, then `floor-pages` from `fixtures/walkthrough` with the same `BILIBI_FACTORY_FIXTURE=disposable`, `DATABASE_URL`, and Platform `CARGO_TARGET_DIR`. It drives the registered PageService and real facade mutations (selection, range flags, both corrections, retry, stale permission and archived company refusals), plus the same company-time source. `BILIBI_FLOOR_SERVE=yes APP_ORIGIN=http://localhost:35593 BIND_ADDR=127.0.0.1:35593` keeps the composed app running for browser proof after the checks. No fixture data is a product seed.

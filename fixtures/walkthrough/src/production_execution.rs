@@ -18,6 +18,7 @@ use bilibi_factory_product_definition::{
 };
 use bilibi_factory_production_execution::{
     Approver, Completion, HoldOverrideRequest, NewOrder, OrderKind, ProductionExecution, Source,
+    WorkInstruction, WorkPlan,
 };
 use bilibi_tenancy::Scope;
 use serde_json::json;
@@ -351,6 +352,19 @@ async fn main() -> Result<(), Error> {
 
     println!("== orders");
     let new_order = NewOrder {
+        work_plan: WorkPlan {
+            target_quantity: Some("14.25".into()),
+            target_unit_id: Some(kg.id),
+            due_on: Some("2026-12-02".into()),
+            instructions: vec![WorkInstruction {
+                operation: "blend".into(),
+                instructions: format!(
+                    "{}\nFinal checkpoint: verify the final material identification.",
+                    "Record the inspection result and compare it with the assembly sheet.\n"
+                        .repeat(35)
+                ),
+            }],
+        },
         code: "ORD-1".into(),
         kind: OrderKind::Order,
         product_id: product.product_id,
@@ -372,6 +386,7 @@ async fn main() -> Result<(), Error> {
             &manager,
             1,
             &NewOrder {
+                work_plan: Default::default(),
                 code: "BATCH-1".into(),
                 kind: OrderKind::Batch,
                 demand_ref: None,
@@ -399,6 +414,7 @@ async fn main() -> Result<(), Error> {
             &manager,
             1,
             &NewOrder {
+                work_plan: Default::default(),
                 code: " ".into(),
                 ..new_order.clone()
             },
@@ -412,6 +428,7 @@ async fn main() -> Result<(), Error> {
             &manager,
             1,
             &NewOrder {
+                work_plan: Default::default(),
                 code: "ORD-X".into(),
                 formula_version: 9,
                 ..new_order.clone()
@@ -426,6 +443,7 @@ async fn main() -> Result<(), Error> {
             &viewer,
             1,
             &NewOrder {
+                work_plan: Default::default(),
                 code: "ORD-V".into(),
                 ..new_order.clone()
             },
@@ -875,6 +893,7 @@ async fn main() -> Result<(), Error> {
                 &manager,
                 1,
                 &NewOrder {
+                    work_plan: Default::default(),
                     code: "ORD-RULE".into(),
                     product_id: bad.product_id,
                     ..new_order.clone()
@@ -1195,6 +1214,7 @@ async fn main() -> Result<(), Error> {
     let principal = authentication.for_system(&**client, &system).await?;
     let importer = pe.importer(&principal, 1)?;
     let import_order = NewOrder {
+        work_plan: Default::default(),
         code: "ORD-IMPORT-ONLY".into(),
         ..new_order.clone()
     };
@@ -1226,6 +1246,7 @@ async fn main() -> Result<(), Error> {
             &principal,
             1,
             &NewOrder {
+                work_plan: Default::default(),
                 code: "ORD-NORMAL-REFUSED".into(),
                 ..new_order.clone()
             },
@@ -1451,6 +1472,7 @@ async fn main() -> Result<(), Error> {
         "import stays in its tenant",
         pe.importer(&principal, foreign_company)?
             .create_order(&NewOrder {
+                work_plan: Default::default(),
                 code: "FOREIGN-IMPORT".into(),
                 ..new_order.clone()
             })
@@ -1508,6 +1530,7 @@ async fn main() -> Result<(), Error> {
         "import cannot create in an archived company",
         importer
             .create_order(&NewOrder {
+                work_plan: Default::default(),
                 code: "ARCHIVED-IMPORT".into(),
                 ..new_order.clone()
             })
@@ -1555,6 +1578,7 @@ async fn main() -> Result<(), Error> {
         "retained import access cannot create after revocation",
         importer
             .create_order(&NewOrder {
+                work_plan: Default::default(),
                 code: "AFTER-REVOKE".into(),
                 ..new_order.clone()
             })
@@ -1917,9 +1941,23 @@ async fn main() -> Result<(), Error> {
         (product_item, imported.id, output_identity),
     )
     .await?;
+    if let Ok(folder) = std::env::var("FACTORY_TRAVELLER_PROOF_DIR") {
+        traveller_proof::run(
+            &app,
+            &admin,
+            &manager,
+            &viewer,
+            &other,
+            &order,
+            std::path::Path::new(&folder),
+        )
+        .await?;
+    }
     println!("production execution walkthrough complete");
     Ok(())
 }
 
 // Import-only read proof; kept separate from the completion scenarios.
 mod import_reads;
+
+mod traveller_proof;
