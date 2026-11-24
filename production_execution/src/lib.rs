@@ -26,8 +26,8 @@ mod web;
 pub use error::Error;
 pub use import::Importer;
 pub use model::{
-    Approver, Completion, Execution, HoldOverride, HoldOverrideRequest, NewOrder, Order, OrderKind,
-    Source,
+    Approver, Completion, Execution, ExecutionPage, HoldOverride, HoldOverrideRequest, NewOrder,
+    Order, OrderKind, Source,
 };
 pub use outcomes::{ProductionTrace, RunYield, TraceOrder, TraceRun, UnitYield, YieldBalance};
 
@@ -239,6 +239,54 @@ impl ProductionExecution {
         orders::list_executions(&**client, scope, company, order_id, limit).await
     }
 
+    /// Completed executions in the half-open UTC instant range [from, to),
+    /// ordered by completion time and immutable ID. Continue with the returned opaque cursor.
+    pub async fn list_executions_in_range(
+        &self,
+        scope: &Scope,
+        company: i64,
+        from: std::time::SystemTime,
+        to: std::time::SystemTime,
+        cursor: Option<&str>,
+        page_size: Option<i64>,
+    ) -> Result<ExecutionPage> {
+        let limit = page_size.unwrap_or(DEFAULT_LIMIT);
+        if from >= to || !(1..=MAXIMUM_LIMIT).contains(&limit) {
+            return Err(bilibi_database::Error::Invalid.into());
+        }
+        let (after_time, after_id) = match cursor {
+            Some(value) => {
+                let (time, id) = value
+                    .split_once('|')
+                    .ok_or(bilibi_database::Error::Invalid)?;
+                let time = time
+                    .parse::<jiff::Timestamp>()
+                    .map(std::time::SystemTime::from)
+                    .map_err(|_| bilibi_database::Error::Invalid)?;
+                let id = id
+                    .parse::<i64>()
+                    .ok()
+                    .filter(|id| *id > 0)
+                    .ok_or(bilibi_database::Error::Invalid)?;
+                if time < from || time >= to {
+                    return Err(bilibi_database::Error::Invalid.into());
+                }
+                (time, id)
+            }
+            None => (from, 0),
+        };
+        let client = self.read_client(scope, company).await?;
+        orders::list_executions_in_range(
+            &**client,
+            scope,
+            company,
+            (from, to),
+            (after_time, after_id),
+            limit,
+        )
+        .await
+    }
+
     pub async fn get_execution(
         &self,
         scope: &Scope,
@@ -286,7 +334,8 @@ inventory::submit! { Module {
     id: "factory/production_execution", layer: Layer::Domains,
     dependencies: &["base/agent_api","base/authz","base/database","base/datetime","base/locale","base/menu","base/module_registry","base/tenancy","base/ui","core/company","core/user","factory/inventory","factory/product_definition"],
     migrations: &[("factory-production-execution-001-orders-executions",include_str!("../migrations/001-orders-executions.sql")),
-        ("factory-production-execution-002-shop-floor-capture",include_str!("../migrations/002-shop-floor-capture.sql"))],
+        ("factory-production-execution-002-shop-floor-capture",include_str!("../migrations/002-shop-floor-capture.sql")),
+        ("factory-production-execution-003-execution-range-index",include_str!("../migrations/003-execution-range-index.sql"))],
     services: &[Service { id:SERVICE, factory: |services| {
         let db = services.get::<Db>("base/database.pool")?.as_ref().clone();
         let mutations: Arc<MutationBoundary> = services.get("base/database.mutations")?;

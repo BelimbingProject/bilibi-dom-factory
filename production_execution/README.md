@@ -199,7 +199,7 @@ H6 adds headless order creation, live/import completion and hold-override reads 
 | Operation under `factory.production_execution.` | Access |
 | --- | --- |
 | `order.list`, `order.get` | `floor.view` |
-| `execution.list`, `execution.get`, `hold_override.list` | `floor.view` |
+| `execution.list`, `execution.list_in_range`, `execution.get`, `hold_override.list` | `floor.view` |
 | `order.create`, `operation.complete` | Reviewed safe write; `configuration.manage` and the facade's sibling grants |
 
 The searchable guide `factory.production_execution` documents inputs and workflow. Both HTTP (`/api/v1/operations`, `/api/v1/plans`, `/api/v1/plans/commit`) and MCP expose the same registry; every operation serves every door (`channels: every`) and lists no step-up, as Bilimbi has none. Direct writes are refused. Every input includes `company_id`; reads take `order_id` or `execution_id` as applicable and lists accept an optional `limit` bounded by the facade. Quantities are exact decimal strings, timestamps are RFC3339 with offsets. Pre-1970 completion/override timestamps are refused because the existing retry fingerprint cannot serialize them.
@@ -235,3 +235,7 @@ Extension owners can replace an existing-lot refusal such as SBG's `output_lot_e
 Do not resubmit an absolute replacement's full quantities as an addition. Reductions and reversals remain Factory-owner work through Inventory's existing signed `record_production_correction`/`record_production_correction_on` seam, with a private registered posting authority, the original transaction ID and a reason. An Extension cannot obtain that authority; registrations outside Factory are refused. `complete_operation` continues to require positive line quantities; this change does not introduce a replacement-completion API. SBG is unchanged here and must retain its refusal until its own correction workflow implements the appropriate adjustments.
 
 The `production-execution` walkthrough now exercises additions through both completion shapes, concurrent retries, trace links, immutable identities, duplicate-code and mismatched-identity refusals, live reuse refusal, hold age measured from a lot's latest addition, stock limits, import authorization, audit capture and rollback when the execution insert fails after posting.
+
+### Execution range read
+
+`list_executions_in_range` and `factory.production_execution.execution.list_in_range` return company-scoped completed executions in the half-open `[from, to)` range of `completed_at` instants. Supply UTC bounds for the desired local dates. Pages are ordered by completion time and execution ID, default to 100 records and accept at most 500; pass `next_cursor` unchanged with the same company and bounds until it is null. Executions are completed records and have no status filter. Reads require `floor.view`.

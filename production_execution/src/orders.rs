@@ -149,6 +149,52 @@ pub(crate) async fn list_executions(
         .collect()
 }
 
+pub(crate) async fn list_executions_in_range(
+    client: &(impl GenericClient + Sync),
+    scope: &Scope,
+    company: i64,
+    range: (std::time::SystemTime, std::time::SystemTime),
+    after: (std::time::SystemTime, i64),
+    limit: i64,
+) -> Result<crate::ExecutionPage> {
+    let sql = format!("SELECT {EXECUTION_COLUMNS} FROM factory_operation_executions WHERE tenant_id=$1 AND company_id=$2 AND completed_at >= $3 AND completed_at < $4 AND (completed_at,id) > ($5,$6) ORDER BY completed_at,id LIMIT $7");
+    let rows = client
+        .query(
+            &sql,
+            &[
+                &scope.tenant(),
+                &company,
+                &range.0,
+                &range.1,
+                &after.0,
+                &after.1,
+                &(limit + 1),
+            ],
+        )
+        .await?;
+    let more = rows.len() > limit as usize;
+    let executions: Vec<_> = rows
+        .iter()
+        .take(limit as usize)
+        .map(|row| execution(row).map(|e| e.0))
+        .collect::<Result<_>>()?;
+    let next_cursor = if more {
+        executions.last().map(|e| {
+            format!(
+                "{}|{}",
+                jiff::Timestamp::try_from(e.completed_at).expect("database timestamp in range"),
+                e.id
+            )
+        })
+    } else {
+        None
+    };
+    Ok(crate::ExecutionPage {
+        executions,
+        next_cursor,
+    })
+}
+
 pub(crate) async fn recorded(
     client: &(impl GenericClient + Sync),
     scope: &Scope,
