@@ -142,7 +142,10 @@ async fn main() -> Result<(), Error> {
     let (staff, _) = login(&app, "staff@example.test").await?;
     let (admin, admin_token) = login(&app, "admin@example.test").await?;
     let (other, _) = login(&app, "manager@other.example.test").await?;
-    let client = db.get().await?;
+    // Observe committed owner writes on a connection outside their transactions.
+    let client = db
+        .try_get_detached("production walkthrough inspects committed rows")
+        .await?;
     let count = |table: &'static str| {
         let client = &client;
         async move {
