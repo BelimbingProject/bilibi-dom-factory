@@ -137,6 +137,11 @@ async fn main() -> Result<(), Error> {
              INSERT INTO user_desks(tenant_id,person_id,company_id) SELECT 1,person_id,1 FROM users WHERE tenant_id=1 AND id=2 ON CONFLICT DO NOTHING;",
         )
         .await?;
+    db.get().await?.batch_execute(
+        "INSERT INTO persons(id,tenant_id,name,code,kind,email) VALUES(5,1,'Alex Admin','factory_admin','human','admin@example.test') ON CONFLICT DO NOTHING;
+         UPDATE users SET person_id=5 WHERE tenant_id=1 AND id=4 AND person_id IS NULL;
+         INSERT INTO user_desks(tenant_id,person_id,company_id) SELECT 1,person_id,1 FROM users WHERE tenant_id=1 AND id=4 ON CONFLICT DO NOTHING;",
+    ).await?;
     let (manager, _) = login(&app, "manager@example.test").await?;
     let (viewer, _) = login(&app, "viewer@example.test").await?;
     let (staff, _) = login(&app, "staff@example.test").await?;
@@ -379,6 +384,19 @@ async fn main() -> Result<(), Error> {
             && order.demand_ref.as_deref() == Some("demand-7")
             && pe.get_order(&viewer, 1, order.id).await? == order,
     )?;
+    if let Ok(folder) = std::env::var("FACTORY_TRAVELLER_PROOF_DIR") {
+        traveller_proof::run(
+            &app,
+            &admin,
+            &manager,
+            &viewer,
+            &other,
+            &order,
+            std::path::Path::new(&folder),
+        )
+        .await?;
+        return Ok(());
+    }
     let batch = pe
         .create_order(
             &manager,
@@ -1959,18 +1977,6 @@ async fn main() -> Result<(), Error> {
         (product_item, imported.id, output_identity),
     )
     .await?;
-    if let Ok(folder) = std::env::var("FACTORY_TRAVELLER_PROOF_DIR") {
-        traveller_proof::run(
-            &app,
-            &admin,
-            &manager,
-            &viewer,
-            &other,
-            &order,
-            std::path::Path::new(&folder),
-        )
-        .await?;
-    }
     println!("production execution walkthrough complete");
     Ok(())
 }
