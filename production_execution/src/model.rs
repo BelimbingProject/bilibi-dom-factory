@@ -129,6 +129,14 @@ pub struct Execution {
     pub routing_version: i32,
 }
 
+/// A bounded page of completed executions. Pass `next_cursor` unchanged to
+/// continue with the same company and time range.
+#[derive(Clone, Debug)]
+pub struct ExecutionPage {
+    pub executions: Vec<Execution>,
+    pub next_cursor: Option<String>,
+}
+
 /// Immutable evidence that held material was consumed early.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HoldOverride {

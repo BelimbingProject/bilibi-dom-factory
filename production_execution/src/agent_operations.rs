@@ -165,6 +165,7 @@ enum Read {
     Orders,
     Order,
     Executions,
+    ExecutionsInRange,
     Execution,
     Overrides,
 }
@@ -203,6 +204,23 @@ impl ReadHandler for Read {
                     .iter()
                     .map(execution_json)
                     .collect::<Vec<_>>()),
+                Self::ExecutionsInRange => {
+                    let page = owner
+                        .list_executions_in_range(
+                            scope,
+                            company,
+                            time(input, "from")?,
+                            time(input, "to")?,
+                            input["cursor"].as_str(),
+                            input
+                                .get("page_size")
+                                .map(|_| id(input, "page_size"))
+                                .transpose()?,
+                        )
+                        .await
+                        .map_err(refuse)?;
+                    json!({"executions": page.executions.iter().map(execution_json).collect::<Vec<_>>(), "next_cursor": page.next_cursor})
+                }
                 Self::Execution => execution_json(
                     &owner
                         .get_execution(scope, company, id(input, "execution_id")?)
@@ -422,6 +440,15 @@ fn order_id() -> Value {
         json!({"company_id":ident(),"order_id":ident(),"limit":{"type":"integer","minimum":1,"maximum":500}}),
     )
 }
+fn execution_range() -> Value {
+    object(
+        &["company_id", "from", "to"],
+        json!({"company_id":ident(), "from":date_time(), "to":date_time(), "page_size":{"type":"integer","minimum":1,"maximum":500}, "cursor":{"type":"string","maxLength":64}}),
+    )
+}
+fn execution_page() -> Value {
+    json!({"type":"object", "description":"Completed executions and an opaque next cursor, or null when exhausted.", "properties":{"executions":list_output(),"next_cursor":{"type":"string","nullable":true}}})
+}
 fn execution_id() -> Value {
     object(
         &["company_id", "execution_id"],
@@ -534,11 +561,12 @@ inventory::submit! { Contribution::new(DEFINITIONS,"factory/production_execution
         read!("factory.production_execution.order.list","List production orders",company,list_output,Orders),
         read!("factory.production_execution.order.get","Read a production order",order_id,record_output,Order),
         read!("factory.production_execution.execution.list","List an order's completed operations",order_id,list_output,Executions),
+        read!("factory.production_execution.execution.list_in_range","List completed operations in a time range",execution_range,execution_page,ExecutionsInRange),
         read!("factory.production_execution.execution.get","Read a completed operation",execution_id,record_output,Execution),
         read!("factory.production_execution.hold_override.list","Read an execution's material hold overrides",execution_id,list_output,Overrides),
         Operation {key:"factory.production_execution.order.create",title:"Create a production order",summary:"Create an order or batch with exact published formula and routing versions.",keywords:&["production","order","batch","create"],capability:MANAGE,input:order_input,output:record_output,handler:Handler::SafeWrite(&Write::Order),channels:Channels::Every,step_up:&[]},
         Operation {key:"factory.production_execution.operation.complete",title:"Complete a production operation",summary:"Record live or imported completion, material effects and hold evidence in one audited transaction, idempotently by request_id.",keywords:&["production","operation","complete","import","run","hold","override"],capability:MANAGE,input:complete_input,output:record_output,handler:Handler::SafeWrite(&Write::Complete),channels:Channels::Every,step_up:&[]},
     ],
     guides:&[Guide {key:"factory.production_execution",title:"Production operations",summary:"Create orders, complete routed operations and read hold evidence.",keywords:&["production","order","operation","run","import","hold"],capability:FLOOR_VIEW,
-        body:"Every operation names company_id. Find orders with order.list and order.get; find completed runs with execution.list and execution.get (all under factory.production_execution). order.create and operation.complete are reviewed safe writes: preview, obtain the person's approval, then commit the exact inputs with the single-use plan code. Direct writes are refused. Creating an order requires exact published product_id/formula_version/routing_version; its code is company-unique, not an idempotency key. Commit it before completing its generated order_id.\n\nCompletion source is live or import; both use the same validations. Import additionally requires factory.production-execution.import, including on retries. Live writes require configuration.manage and the Product Definition and Inventory view/manage grants used by the facade. Reviewed imports retain this operation's configuration.manage gate and require import, which covers their sibling reads and postings; reads require floor.view. operator_type/operator_id attribute the work, never authorize it. started_at and completed_at have offsets; completion cannot be in the future. Inputs and outputs name allowed operation items and a resource allowed by its routing. At least one side is nonempty. Quantities are exact decimal strings. Omitted unit_id means the immutable native unit; every non-native unit requires an explicit conversion_version so a later conversion cannot change the review. A transform's variance is either {shared:{evidence,reconciliation_basis}} or {units:[{unit_id,evidence,reconciliation_basis}]}.\n\nOutput lines may create a lot/unit identity with kind, code and dimensions, or, for an import only, add stock to an existing identity by citing identity_id without identity (a live completion refuses it as Invalid identity). This is an additional quantity, never an absolute replacement; the identity and earlier executions stay immutable. Import corrections use a new request_id for each adjustment and the same facts for retries. Previews use symbolic created identities, never predicted IDs. Commit returns resolved identity IDs in entries; inventory_transaction_id also leads to factory.inventory.transaction.get.\n\nHeld inputs must name an identity with valid source evidence. An early draw requires material-hold.override. A live hold_override carries only reason: recorder and approver come from Scope and its time is assigned at recording. Import also requires historical occurred_at (not after completion) and evidence, and may name an historical approver (kind user with id, or agent with id and acting_for_user_id). Historical approver is evidence only. No caller may name the recorder; impersonated overrides are refused. hold_override.list returns the immutable evidence.\n\nCompletion request_id is company-unique (240 bytes). Identical retries return the original without reposting; different content conflicts. Import authorization is always rechecked, while recorded retries do not reauthorize historical holds. Plans commit all operations or none, but preview each against committed data; commit newly generated IDs in an earlier plan. Multiple individually feasible draws can fail collectively, rolling back the whole plan. Reviews execute the real owner path then roll back business and audit writes; PostgreSQL sequence allocations may leave gaps."}],
+        body:"Every operation names company_id. Find orders with order.list and order.get; find completed runs with execution.list and execution.get (all under factory.production_execution). execution.list_in_range reads a company across orders using the half-open completed_at instant range [from, to); pass next_cursor unchanged with the same bounds and company until null. Supply UTC bounds for local calendar dates. order.create and operation.complete are reviewed safe writes: preview, obtain the person's approval, then commit the exact inputs with the single-use plan code. Direct writes are refused. Creating an order requires exact published product_id/formula_version/routing_version; its code is company-unique, not an idempotency key. Commit it before completing its generated order_id.\n\nCompletion source is live or import; both use the same validations. Import additionally requires factory.production-execution.import, including on retries. Live writes require configuration.manage and the Product Definition and Inventory view/manage grants used by the facade. Reviewed imports retain this operation's configuration.manage gate and require import, which covers their sibling reads and postings; reads require floor.view. operator_type/operator_id attribute the work, never authorize it. started_at and completed_at have offsets; completion cannot be in the future. Inputs and outputs name allowed operation items and a resource allowed by its routing. At least one side is nonempty. Quantities are exact decimal strings. Omitted unit_id means the immutable native unit; every non-native unit requires an explicit conversion_version so a later conversion cannot change the review. A transform's variance is either {shared:{evidence,reconciliation_basis}} or {units:[{unit_id,evidence,reconciliation_basis}]}.\n\nOutput lines may create a lot/unit identity with kind, code and dimensions, or, for an import only, add stock to an existing identity by citing identity_id without identity (a live completion refuses it as Invalid identity). This is an additional quantity, never an absolute replacement; the identity and earlier executions stay immutable. Import corrections use a new request_id for each adjustment and the same facts for retries. Previews use symbolic created identities, never predicted IDs. Commit returns resolved identity IDs in entries; inventory_transaction_id also leads to factory.inventory.transaction.get.\n\nHeld inputs must name an identity with valid source evidence. An early draw requires material-hold.override. A live hold_override carries only reason: recorder and approver come from Scope and its time is assigned at recording. Import also requires historical occurred_at (not after completion) and evidence, and may name an historical approver (kind user with id, or agent with id and acting_for_user_id). Historical approver is evidence only. No caller may name the recorder; impersonated overrides are refused. hold_override.list returns the immutable evidence.\n\nCompletion request_id is company-unique (240 bytes). Identical retries return the original without reposting; different content conflicts. Import authorization is always rechecked, while recorded retries do not reauthorize historical holds. Plans commit all operations or none, but preview each against committed data; commit newly generated IDs in an earlier plan. Multiple individually feasible draws can fail collectively, rolling back the whole plan. Reviews execute the real owner path then roll back business and audit writes; PostgreSQL sequence allocations may leave gaps."}],
 }) }

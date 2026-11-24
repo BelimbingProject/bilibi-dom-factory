@@ -1,0 +1,2 @@
+CREATE INDEX factory_operation_executions_completion_index
+ ON factory_operation_executions(tenant_id,company_id,completed_at,id);
