@@ -1,20 +1,20 @@
 //! Private work order travels with its saved routing and the recorded plan.
 use crate::{
     contributions::FLOOR_VIEW,
+    traveller::Traveller,
     traveller_layout::{CONTRACT, KEY},
-    Order, OrderKind, ProductionExecution,
+    NewOrder, OrderKind, ProductionExecution,
 };
-use bilibi_artifacts::{Artifacts, Operation, Owner, PdfOptions, Reference};
+use bilibi_artifacts::Artifacts;
 use bilibi_branding::Branding;
 use bilibi_database::{Error, Result};
 use bilibi_module_registry::{
     contributions::{Access, Download as Route, DOWNLOADS},
     Contribution, Provenance,
 };
-use bilibi_party_ids::OrganisationId;
 use bilibi_settings::{Settings, Target};
-use bilibi_templates::{CompiledPrint, Origin, PrintFacts, PrintValue, Templates};
-use bilibi_tenancy::{ProofClient, ProofFuture, Scope};
+use bilibi_templates::{CompiledPrint, PrintFacts, PrintValue, Templates};
+use bilibi_tenancy::Scope;
 use bilibi_ui::download::{Download, DownloadFuture, DownloadRequest, FileBody};
 use std::sync::Arc;
 
@@ -29,45 +29,52 @@ pub(crate) struct TravellerDownload {
     pub(crate) settings: Arc<Settings>,
 }
 
-impl Owner for TravellerDownload {
-    fn owner_id(&self) -> &'static str {
-        "factory/production_execution"
-    }
+struct PrintOrder<'a> {
+    code: &'a str,
+    kind: OrderKind,
+    product_id: i64,
+    formula_version: i32,
+    routing_version: i32,
+    demand_ref: Option<&'a str>,
+}
 
-    fn authorize<'a>(
-        &'a self,
-        client: &'a dyn ProofClient,
-        scope: &'a Scope,
-        company: OrganisationId,
-        operation: Operation,
-        reference: Option<&'a Reference>,
-    ) -> ProofFuture<'a, ()> {
-        Box::pin(async move {
-            if !matches!(operation, Operation::Create | Operation::Read) {
-                return Err(Error::Forbidden);
-            }
-            bilibi_company::authorize_work_target(client, scope, company.get(), FLOOR_VIEW).await?;
-            let order = reference
-                .filter(|reference| reference.kind == KIND)
-                .and_then(|reference| reference.subject.parse::<i64>().ok())
-                .filter(|id| *id > 0)
-                .ok_or(Error::NotFound)?;
-            client.query_opt(
-                "SELECT id FROM factory_production_orders WHERE tenant_id=$1 AND company_id=$2 AND id=$3",
-                &[&scope.tenant(), &company.get(), &order]
-            ).await?.ok_or(Error::NotFound)?;
-            Ok(())
-        })
+pub(crate) fn validate(new: &NewOrder, plan: &Traveller) -> crate::Result<()> {
+    let order = PrintOrder {
+        code: &new.code,
+        kind: new.kind,
+        product_id: new.product_id,
+        formula_version: new.formula_version,
+        routing_version: new.routing_version,
+        demand_ref: new.demand_ref.as_deref(),
+    };
+    let invalid = || crate::Error::Invalid {
+        field: "Traveller",
+        message: "exceeds the print contract or contains invalid facts",
+    };
+    for default in CONTRACT.defaults {
+        let layout = CONTRACT
+            .compile(default.language, default.layout)
+            .map_err(|_| invalid())?;
+        inline(
+            &layout,
+            &order,
+            plan,
+            default.language,
+            bilibi_ui::Accent::default(),
+        )
+        .map_err(|_| invalid())?;
     }
+    Ok(())
 }
 
 fn inline(
     layout: &CompiledPrint<'_>,
-    order: &Order,
-    malay: bool,
+    order: &PrintOrder<'_>,
+    plan: &Traveller,
+    language: &str,
     accent: bilibi_ui::Accent,
 ) -> Result<bilibi_artifacts::InlineDocument> {
-    let plan = &order.traveller;
+    let malay = language.split('-').next() == Some("ms");
     let kind = match (malay, order.kind) {
         (false, OrderKind::Order) => "Production order",
         (false, OrderKind::Batch) => "Production batch",
@@ -90,10 +97,10 @@ fn inline(
         .collect();
     let rows: Vec<PrintFacts<'_>> = rows.iter().map(|row| row.as_slice()).collect();
     let mut facts = vec![
-        ("number", PrintValue::Text(order.code.as_str())),
+        ("number", PrintValue::Text(order.code)),
         ("kind", PrintValue::Text(kind)),
         ("issuer", PrintValue::Text(&plan.issuer)),
-        ("product", PrintValue::Integer(plan.product)),
+        ("product", PrintValue::Integer(order.product_id)),
         (
             "formula",
             PrintValue::Integer(i64::from(order.formula_version)),
@@ -118,11 +125,7 @@ fn inline(
             PrintValue::Date(due.parse().map_err(|_| Error::Invalid)?),
         ));
     }
-    if let Some(demand) = order
-        .demand_ref
-        .as_deref()
-        .filter(|text| !text.trim().is_empty())
-    {
+    if let Some(demand) = order.demand_ref.filter(|text| !text.trim().is_empty()) {
         facts.push(("demand", PrintValue::Text(demand)));
     }
     layout
@@ -153,7 +156,7 @@ impl Download<Scope, Error> for TravellerDownload {
                     crate::Error::OrderNotFound => Error::NotFound,
                     _ => Error::Internal,
                 })?;
-            let mut client = self.production.db.get().await?;
+            let client = self.production.db.get().await?;
             let language = self
                 .settings
                 .get(
@@ -177,40 +180,29 @@ impl Download<Scope, Error> for TravellerDownload {
             let layout = CONTRACT
                 .compile(&selected.language, &selected.layout)
                 .map_err(|_| Error::Invalid)?;
-            let malay = selected.language.split('-').next() == Some("ms");
             let accent = self.branding.accent(&**client).await?;
-            let document = inline(&layout, &order, malay, accent)?;
-            let revision = match selected.origin {
-                Origin::Packaged { version } => format!("packaged-{version}"),
-                Origin::Tenant { revision } | Origin::Company { revision, .. } => {
-                    format!("revision-{revision}")
-                }
+            let header = PrintOrder {
+                code: &order.code,
+                kind: order.kind,
+                product_id: order.product_id,
+                formula_version: order.formula_version,
+                routing_version: order.routing_version,
+                demand_ref: order.demand_ref.as_deref(),
             };
-            let options = PdfOptions::default()
-                .template_version(format!("{}-{revision}", selected.language))
-                .data_version(format!(
-                    "{}-{}-{}",
-                    CONTRACT.version, order.formula_version, order.routing_version
-                ));
-            let owner = self.artifacts.for_owner(scope, company, self);
-            let stored = owner
-                .render_inline_document(
-                    &mut client,
-                    Reference {
-                        subject: id.to_string(),
-                        kind: KIND.into(),
-                    },
-                    document,
-                    &options,
-                )
-                .await
-                .map_err(artifact_error)?;
-            let pdf = owner
-                .read(&mut client, &stored.document.id)
+            let document = inline(
+                &layout,
+                &header,
+                &order.traveller,
+                &selected.language,
+                accent,
+            )?;
+            let pdf = self
+                .artifacts
+                .print_document(&client, document)
                 .await
                 .map_err(artifact_error)?;
             Ok(FileBody::inline(
-                pdf.bytes,
+                pdf,
                 "application/pdf",
                 &format!("work-order-{id}.pdf"),
             ))

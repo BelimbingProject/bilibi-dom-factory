@@ -276,9 +276,9 @@ async fn main() -> Result<(), Error> {
         1,
         product.product_id,
         &json!({"operations":[
+            {"code":"fails","sequence":3,"inputs":[free],"outputs":[trim],"allowed_resource_ids":[r1]},
             {"code":"blend","sequence":1,"inputs":[held,free],"outputs":[product_item,trim],"allowed_resource_ids":[r1]},
-            {"code":"make","sequence":2,"inputs":[],"outputs":[product_item,held],"allowed_resource_ids":[r1,r2]},
-            {"code":"fails","sequence":3,"inputs":[free],"outputs":[trim],"allowed_resource_ids":[r1]}
+            {"code":"make","sequence":2,"inputs":[],"outputs":[product_item,held],"allowed_resource_ids":[r1,r2]}
         ]}),
     )
     .await?;
@@ -1240,7 +1240,6 @@ async fn main() -> Result<(), Error> {
     let principal = authentication.for_system(&**client, &system).await?;
     let importer = pe.importer(&principal, 1)?;
     let import_order = NewOrder {
-        work_plan: Default::default(),
         code: "ORD-IMPORT-ONLY".into(),
         ..new_order.clone()
     };

@@ -149,7 +149,7 @@ fn completion(input: &Value) -> Result<(Source, Completion)> {
 fn order_json(order: &Order) -> Value {
     json!({"id":order.id,"company_id":order.company_id,"code":order.code,"kind":order.kind,
         "product_id":order.product_id,"formula_version":order.formula_version,
-        "routing_version":order.routing_version,"demand_ref":order.demand_ref,"work_plan":order.traveller})
+        "routing_version":order.routing_version,"demand_ref":order.demand_ref})
 }
 fn execution_json(run: &Execution) -> Value {
     json!({"id":run.id,"company_id":run.company_id,"order_id":run.order_id,"request_id":run.request_id,
@@ -269,6 +269,7 @@ impl Write {
                     .await
                     .map_err(refuse)?;
                 let mut value = order_json(&order);
+                value["work_plan"] = json!(order.traveller);
                 if review {
                     value.as_object_mut().expect("object").remove("id");
                 }

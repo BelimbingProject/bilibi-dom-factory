@@ -129,15 +129,18 @@ impl ProductionExecution {
         )
         .await?;
         bilibi_company::require_writable(tx.sql(), scope, company, true).await?;
-        let picked = if source == Source::Import {
-            let import = self
-                .completer
-                .inventory
-                .production_import(scope, company, &AUTHORITY)?;
+        let import = (source == Source::Import)
+            .then(|| {
+                self.completer
+                    .inventory
+                    .production_import(scope, company, &AUTHORITY)
+            })
+            .transpose()?;
+        let picked = if let Some(import) = &import {
             self.product_definition
                 .select_import_revisions_on(
                     tx.sql(),
-                    &import,
+                    import,
                     new.product_id,
                     new.formula_version,
                     new.routing_version,
@@ -180,10 +183,18 @@ impl ProductionExecution {
             {
                 return Err(field("Code", "has already been taken"));
             }
-        let traveller = serde_json::to_value(
-            self.freeze_traveller(tx.sql(), scope, company, picked, &new.work_plan)
-                .await?,
-        )?;
+        let traveller = self
+            .freeze_traveller(
+                tx.sql(),
+                scope,
+                company,
+                import.as_ref(),
+                picked,
+                &new.work_plan,
+            )
+            .await?;
+        traveller_pdf::validate(new, &traveller)?;
+        let traveller = serde_json::to_value(traveller)?;
         let tenant = scope.tenant();
         let new = new.clone();
         let id = tx
@@ -340,7 +351,7 @@ impl ProductionExecution {
 
 inventory::submit! { Module {
     id: "factory/production_execution", layer: Layer::Domains,
-    dependencies: &["base/agent_api","base/artifacts","base/branding","base/party_ids","base/settings","base/templates","base/authz","base/database","base/datetime","base/locale","base/menu","base/module_registry","base/tenancy","base/ui","core/company","core/user","factory/inventory","factory/product_definition"],
+    dependencies: &["base/agent_api","base/artifacts","base/branding","base/settings","base/templates","base/authz","base/database","base/datetime","base/locale","base/menu","base/module_registry","base/tenancy","base/ui","core/company","core/user","factory/inventory","factory/product_definition"],
     migrations: &[("factory-production-execution-001-orders-executions",include_str!("../migrations/001-orders-executions.sql")),
         ("factory-production-execution-002-shop-floor-capture",include_str!("../migrations/002-shop-floor-capture.sql")),
         ("factory-production-execution-003-execution-range-index",include_str!("../migrations/003-execution-range-index.sql")),

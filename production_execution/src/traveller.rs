@@ -1,5 +1,6 @@
 //! Work instructions frozen with the order's exact published routing.
 use crate::{Error, ProductionExecution, Result};
+use bilibi_factory_inventory::ProductionImport;
 use bilibi_factory_product_definition::SelectedRevisions;
 use bilibi_tenancy::Scope;
 use serde::{Deserialize, Serialize};
@@ -26,7 +27,6 @@ pub struct WorkInstruction {
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) struct Traveller {
     pub issuer: String,
-    pub product: i64,
     pub quantity: Option<String>,
     pub unit: Option<String>,
     pub due_on: Option<String>,
@@ -50,6 +50,7 @@ impl ProductionExecution {
         client: &Transaction<'_>,
         scope: &Scope,
         company: i64,
+        import: Option<&ProductionImport<'_>>,
         picked: SelectedRevisions,
         plan: &WorkPlan,
     ) -> Result<Traveller> {
@@ -71,11 +72,11 @@ impl ProductionExecution {
                 if !valid {
                     return Err(invalid("Target quantity", "must be a positive decimal"));
                 }
-                let unit = self
-                    .completer
-                    .inventory
-                    .get_unit_on(client, scope, company, id)
-                    .await?;
+                let inventory = &self.completer.inventory;
+                let unit = match import {
+                    Some(import) => inventory.get_import_unit_on(client, import, id).await?,
+                    None => inventory.get_unit_on(client, scope, company, id).await?,
+                };
                 if unit.retired {
                     return Err(invalid("Target unit", "must be active"));
                 }
@@ -142,7 +143,6 @@ impl ProductionExecution {
         operations.sort_by_key(|operation| operation.sequence);
         Ok(Traveller {
             issuer: issuer.display_name,
-            product: picked.definition.product_id,
             quantity,
             unit,
             due_on,

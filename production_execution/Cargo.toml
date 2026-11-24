@@ -16,7 +16,6 @@ jiff = "0.2.38"
 bilibi-agent-api.workspace = true
 bilibi-artifacts.workspace = true
 bilibi-branding.workspace = true
-bilibi-party-ids.workspace = true
 bilibi-settings.workspace = true
 bilibi-templates.workspace = true
 bilibi-authz.workspace = true

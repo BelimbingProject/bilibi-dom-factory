@@ -6,7 +6,7 @@ use bilibi_settings::{Settings, Target};
 use bilibi_tenancy::Scope;
 use bilibi_ui::download::{DownloadRequest, DownloadService};
 use serde_json::json;
-use std::{collections::HashMap, os::unix::fs::PermissionsExt, path::Path};
+use std::{collections::HashMap, path::Path, process::Command};
 
 pub(super) async fn run(
     app: &bilibi_web::App,
@@ -17,9 +17,6 @@ pub(super) async fn run(
     order: &Order,
     folder: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let storage = folder.join("private-artifacts");
-    std::fs::create_dir_all(&storage)?;
-    std::fs::set_permissions(&storage, std::fs::Permissions::from_mode(0o700))?;
     let settings = app.services.get::<Settings>("base/settings.store")?;
     let boundary = app
         .services
@@ -31,18 +28,15 @@ pub(super) async fn run(
             admin.mutation_context("walkthrough.work-traveller"),
         )
         .await?;
-    for (key, value) in [
-        ("artifacts.storage_root", json!(storage)),
-        ("artifacts.retention_days", json!(30)),
-        (
+    settings
+        .put(
+            &mut tx,
+            admin,
+            Target::Global,
             "pdf.chromium.binary",
             json!(std::env::var("FACTORY_TRAVELLER_CHROMIUM")?),
-        ),
-    ] {
-        settings
-            .put(&mut tx, admin, Target::Global, key, value)
-            .await?;
-    }
+        )
+        .await?;
     tx.commit().await?;
     drop(client);
 
@@ -57,14 +51,22 @@ pub(super) async fn run(
         path: &path,
         query: &query,
     };
-    if download.0.serve(request(outsider)).await.is_ok() {
-        return Err("another tenant received the work order".into());
+    if !matches!(
+        download.0.serve(request(outsider)).await,
+        Err(Error::Forbidden | Error::NotFound)
+    ) {
+        return Err("the original traveller did not refuse the other tenant".into());
     }
     let original = download.0.serve(request(viewer)).await?;
-    if !original.bytes.starts_with(b"%PDF-") {
-        return Err("work traveller was not a PDF".into());
-    }
-    std::fs::write(folder.join("work-traveller-en.pdf"), &original.bytes)?;
+    let original_path = folder.join("work-traveller-en.pdf");
+    std::fs::write(&original_path, &original.bytes)?;
+    let original_text = check_pdf(
+        &original_path,
+        "Work order traveller",
+        "Routing version",
+        "Sequence",
+        (595.0, 842.0),
+    )?;
 
     let definitions = app
         .services
@@ -94,7 +96,24 @@ pub(super) async fn run(
         )
         .await?;
     let reprint = download.0.serve(request(viewer)).await?;
-    std::fs::write(folder.join("work-traveller-reprint.pdf"), &reprint.bytes)?;
+    if !matches!(
+        download.0.serve(request(outsider)).await,
+        Err(Error::Forbidden | Error::NotFound)
+    ) {
+        return Err("the reprint did not refuse the other tenant".into());
+    }
+    let reprint_path = folder.join("work-traveller-reprint.pdf");
+    std::fs::write(&reprint_path, &reprint.bytes)?;
+    let reprint_text = check_pdf(
+        &reprint_path,
+        "Work order traveller",
+        "Routing version",
+        "Sequence",
+        (595.0, 842.0),
+    )?;
+    if original_text != reprint_text {
+        return Err("the English traveller changed after routing publication".into());
+    }
     let registry = app.services.get::<Registry>("base/agent_api.registry")?;
     let key = "factory.production_execution.traveller";
     let current = registry
@@ -138,7 +157,76 @@ pub(super) async fn run(
     tx.commit().await?;
     drop(client);
     let malay = download.0.serve(request(viewer)).await?;
-    std::fs::write(folder.join("work-traveller-ms.pdf"), &malay.bytes)?;
+    let malay_path = folder.join("work-traveller-ms.pdf");
+    std::fs::write(&malay_path, &malay.bytes)?;
+    check_pdf(
+        &malay_path,
+        "Kad kerja pengeluaran",
+        "Versi laluan",
+        "Turutan",
+        (612.0, 792.0),
+    )?;
     println!("Travellers printed from order {} before and after the newer routing; the other tenant was refused.", order.id);
     Ok(())
+}
+
+fn check_pdf(
+    path: &Path,
+    heading: &str,
+    routing_label: &str,
+    sequence_label: &str,
+    paper: (f64, f64),
+) -> Result<String, Box<dyn std::error::Error>> {
+    let text = poppler("pdftotext", &["-layout"], path, &["-"])?;
+    let steps: Vec<_> = text
+        .lines()
+        .filter_map(|line| {
+            let mut words = line.split_whitespace();
+            Some((words.next()?.parse::<u32>().ok()?, words.next()?))
+        })
+        .collect();
+    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let routing = format!("{routing_label} 1");
+    if steps != [(1, "blend"), (2, "make"), (3, "fails")]
+        || !normalized.contains(heading)
+        || !normalized.contains(sequence_label)
+        || !normalized.contains(&routing)
+        || !normalized.contains("Final checkpoint: verify the final material identification.")
+    {
+        return Err(format!("{} has unexpected traveller text", path.display()).into());
+    }
+
+    let metadata = poppler("pdfinfo", &[], path, &[])?;
+    let size = metadata
+        .lines()
+        .find_map(|line| line.strip_prefix("Page size:"))
+        .ok_or("PDF has no page size")?;
+    let mut size = size.split_whitespace();
+    let width: f64 = size.next().ok_or("PDF has no page width")?.parse()?;
+    if size.next() != Some("x") {
+        return Err("PDF has an unexpected page size format".into());
+    }
+    let height: f64 = size.next().ok_or("PDF has no page height")?.parse()?;
+    if (width - paper.0).abs() > 1.0 || (height - paper.1).abs() > 1.0 {
+        return Err(format!("{} has unexpected paper dimensions", path.display()).into());
+    }
+    Ok(text)
+}
+
+fn poppler(
+    tool: &str,
+    before: &[&str],
+    path: &Path,
+    after: &[&str],
+) -> Result<String, Box<dyn std::error::Error>> {
+    let output = Command::new(tool)
+        .env("LC_ALL", "C")
+        .args(before)
+        .arg(path)
+        .args(after)
+        .output()?;
+    if !output.status.success() {
+        return Err(format!("{tool} failed: {}", String::from_utf8_lossy(&output.stderr)).into());
+    }
+    Ok(String::from_utf8(output.stdout)?)
 }
