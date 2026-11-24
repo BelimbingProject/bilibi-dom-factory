@@ -7,8 +7,8 @@ use crate::{
 use bilibi_tenancy::Scope;
 use tokio_postgres::{GenericClient, Row};
 
-pub(crate) const ORDER_COLUMNS: &str =
-    "id,company_id,code,kind,product_id,formula_version,routing_version,demand_ref,traveller";
+const ORDER_COLUMNS: &str =
+    "id,company_id,code,kind,product_id,formula_version,routing_version,demand_ref";
 pub(crate) const EXECUTION_COLUMNS: &str = "id,company_id,order_id,request_id,request_fingerprint,source,operation_code,resource_id,operator_type,operator_id,started_at,completed_at,inputs,outputs,variance,evidence,inventory_transaction_id,formula_version,routing_version";
 
 fn source(name: &str) -> Result<Source> {
@@ -19,7 +19,7 @@ fn source(name: &str) -> Result<Source> {
     }
 }
 
-pub(crate) fn order(row: &Row) -> Result<Order> {
+fn order(row: &Row) -> Result<Order> {
     Ok(Order {
         id: row.get("id"),
         company_id: row.get("company_id"),
@@ -29,7 +29,6 @@ pub(crate) fn order(row: &Row) -> Result<Order> {
         formula_version: row.get("formula_version"),
         routing_version: row.get("routing_version"),
         demand_ref: row.get("demand_ref"),
-        traveller: serde_json::from_value(row.get("traveller"))?,
     })
 }
 
@@ -96,6 +95,22 @@ pub(crate) async fn get_order(
         .await?
         .ok_or(Error::OrderNotFound)?;
     order(&row)
+}
+
+pub(crate) async fn get_traveller(
+    client: &(impl GenericClient + Sync),
+    scope: &Scope,
+    company: i64,
+    id: i64,
+) -> Result<(Order, crate::traveller::Traveller)> {
+    let sql = format!(
+        "SELECT {ORDER_COLUMNS},traveller FROM factory_production_orders WHERE tenant_id=$1 AND company_id=$2 AND id=$3"
+    );
+    let row = client
+        .query_opt(&sql, &[&scope.tenant(), &company, &id])
+        .await?
+        .ok_or(Error::OrderNotFound)?;
+    Ok((order(&row)?, serde_json::from_value(row.get("traveller"))?))
 }
 
 pub(crate) async fn list_orders(

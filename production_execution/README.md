@@ -181,7 +181,7 @@ Timestamps use Base Datetime's display policy and shared timestamp component. `s
 
 The selected order's **Print traveller** action opens a private PDF. The order snapshot keeps its order reference, product identity, formula and routing versions, operation codes in routing sequence, and any demand reference. The reviewed order creation operation also accepts an optional `work_plan` with an exact `target_quantity` and active `target_unit_id` together, `due_on` as a calendar date, and `instructions` keyed by operation code. It freezes the unit code and each instruction when it saves the order. Editing a product routing does not change existing orders or their travellers.
 
-English and Bahasa Melayu layouts ship with the module. Layout revisions use Base Templates and render offline through Base Artifacts. The PDF uses the selected company's language and the floor's existing viewing permission.
+English and Bahasa Melayu layouts ship with the module. Layout revisions use Base Templates and render offline through Base Artifacts. The PDF uses the selected company's language and the floor's existing viewing permission. If an override exceeds the HTML render limit for an order, the PDF uses the packaged layout for that language.
 
 For the focused PDF proof, set `FACTORY_TRAVELLER_PROOF_DIR` to a private output directory and `FACTORY_TRAVELLER_CHROMIUM` to the Chromium executable when running `production-execution` on a disposable database. With Poppler's `pdftotext` and `pdfinfo` on PATH, it checks the ordered steps and long instructions, compares the English A4 original and reprint after publishing a renamed routing, and checks the Bahasa Melayu Letter copy. A different tenant is refused.
 

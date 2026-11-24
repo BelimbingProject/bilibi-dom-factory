@@ -1,6 +1,7 @@
 //! Private work order travels with its saved routing and the recorded plan.
 use crate::{
     contributions::FLOOR_VIEW,
+    orders,
     traveller::Traveller,
     traveller_layout::{CONTRACT, KEY},
     NewOrder, OrderKind, ProductionExecution,
@@ -12,9 +13,10 @@ use bilibi_module_registry::{
     contributions::{Access, Download as Route, DOWNLOADS},
     Contribution, Provenance,
 };
+use bilibi_party_ids::OrganisationId;
 use bilibi_settings::{Settings, Target};
-use bilibi_templates::{CompiledPrint, PrintFacts, PrintValue, Templates};
-use bilibi_tenancy::Scope;
+use bilibi_templates::{CompiledPrint, Origin, PrintFacts, PrintValue, Problem, Templates};
+use bilibi_tenancy::{ReadClient, Scope};
 use bilibi_ui::download::{Download, DownloadFuture, DownloadRequest, FileBody};
 use std::sync::Arc;
 
@@ -25,6 +27,9 @@ pub(crate) struct TravellerDownload {
     pub(crate) production: Arc<ProductionExecution>,
     pub(crate) artifacts: Arc<Artifacts>,
     pub(crate) branding: Arc<Branding>,
+}
+
+pub(crate) struct TravellerLayouts {
     pub(crate) templates: Arc<Templates>,
     pub(crate) settings: Arc<Settings>,
 }
@@ -38,33 +43,87 @@ struct PrintOrder<'a> {
     demand_ref: Option<&'a str>,
 }
 
-pub(crate) fn validate(new: &NewOrder, plan: &Traveller) -> crate::Result<()> {
-    let order = PrintOrder {
-        code: &new.code,
-        kind: new.kind,
-        product_id: new.product_id,
-        formula_version: new.formula_version,
-        routing_version: new.routing_version,
-        demand_ref: new.demand_ref.as_deref(),
-    };
-    let invalid = || crate::Error::Invalid {
-        field: "Traveller",
-        message: "exceeds the print contract or contains invalid facts",
-    };
-    for default in CONTRACT.defaults {
-        let layout = CONTRACT
-            .compile(default.language, default.layout)
-            .map_err(|_| invalid())?;
-        inline(
-            &layout,
-            &order,
-            plan,
-            default.language,
-            bilibi_ui::Accent::default(),
-        )
-        .map_err(|_| invalid())?;
+impl TravellerLayouts {
+    pub(crate) async fn validate(
+        &self,
+        client: &dyn ReadClient,
+        scope: &Scope,
+        company: i64,
+        new: &NewOrder,
+        plan: &Traveller,
+    ) -> crate::Result<()> {
+        let order = PrintOrder {
+            code: &new.code,
+            kind: new.kind,
+            product_id: new.product_id,
+            formula_version: new.formula_version,
+            routing_version: new.routing_version,
+            demand_ref: new.demand_ref.as_deref(),
+        };
+        let accent = bilibi_ui::Accent::default();
+        let invalid = || crate::Error::Invalid {
+            field: "Traveller",
+            message: "exceeds the print contract or contains invalid facts",
+        };
+        for default in CONTRACT.defaults {
+            let layout = CONTRACT
+                .compile(default.language, default.layout)
+                .map_err(|_| invalid())?;
+            inline(&layout, &order, plan, default.language, accent).map_err(|_| invalid())?;
+        }
+        let company = OrganisationId::new(company).map_err(|_| Error::Invalid)?;
+        self.document(client, scope, company, &order, plan, accent)
+            .await
+            .map_err(|error| match error {
+                Error::Invalid => invalid(),
+                error => error.into(),
+            })?;
+        Ok(())
     }
-    Ok(())
+
+    async fn document(
+        &self,
+        client: &dyn ReadClient,
+        scope: &Scope,
+        company: OrganisationId,
+        order: &PrintOrder<'_>,
+        plan: &Traveller,
+        accent: bilibi_ui::Accent,
+    ) -> Result<bilibi_artifacts::InlineDocument> {
+        let language = self
+            .settings
+            .get(
+                client,
+                scope,
+                Target::Company(company),
+                bilibi_templates::LANGUAGE,
+            )
+            .await?;
+        let requested = language.value.as_str().unwrap_or("en");
+        let selected = self
+            .templates
+            .resolve_print(client, scope, KEY, Some(company), requested, None)
+            .await?;
+        let layout = CONTRACT
+            .compile(&selected.language, &selected.layout)
+            .map_err(|_| Error::Invalid)?;
+        let document = inline(&layout, order, plan, &selected.language, accent);
+        match document {
+            Err(problem)
+                if problem.field == "layout"
+                    && !matches!(selected.origin, Origin::Packaged { .. }) =>
+            {
+                let packaged = CONTRACT
+                    .packaged(requested, None)
+                    .map_err(|_| Error::Invalid)?;
+                let layout = CONTRACT
+                    .compile(&packaged.language, &packaged.layout)
+                    .map_err(|_| Error::Invalid)?;
+                inline(&layout, order, plan, &packaged.language, accent).map_err(|_| Error::Invalid)
+            }
+            other => other.map_err(|_| Error::Invalid),
+        }
+    }
 }
 
 fn inline(
@@ -73,7 +132,7 @@ fn inline(
     plan: &Traveller,
     language: &str,
     accent: bilibi_ui::Accent,
-) -> Result<bilibi_artifacts::InlineDocument> {
+) -> std::result::Result<bilibi_artifacts::InlineDocument, Problem> {
     let malay = language.split('-').next() == Some("ms");
     let kind = match (malay, order.kind) {
         (false, OrderKind::Order) => "Production order",
@@ -122,15 +181,16 @@ fn inline(
     if let Some(due) = plan.due_on.as_deref() {
         facts.push((
             "due_on",
-            PrintValue::Date(due.parse().map_err(|_| Error::Invalid)?),
+            PrintValue::Date(due.parse().map_err(|_| Problem {
+                field: "due_on".into(),
+                message: "Invalid due date".into(),
+            })?),
         ));
     }
     if let Some(demand) = order.demand_ref.filter(|text| !text.trim().is_empty()) {
         facts.push(("demand", PrintValue::Text(demand)));
     }
-    layout
-        .document(order.kind.name(), &facts, accent)
-        .map_err(|_| Error::Invalid)
+    layout.document(order.kind.name(), &facts, accent)
 }
 
 impl Download<Scope, Error> for TravellerDownload {
@@ -147,39 +207,14 @@ impl Download<Scope, Error> for TravellerDownload {
                 .and_then(|id| id.parse::<i64>().ok())
                 .filter(|id| *id > 0)
                 .ok_or(Error::NotFound)?;
-            let order = self
+            let client = self
                 .production
-                .get_order(scope, company.get(), id)
+                .read_client(scope, company.get())
                 .await
-                .map_err(|error| match error {
-                    crate::Error::Access(error) => error,
-                    crate::Error::OrderNotFound => Error::NotFound,
-                    _ => Error::Internal,
-                })?;
-            let client = self.production.db.get().await?;
-            let language = self
-                .settings
-                .get(
-                    &**client,
-                    scope,
-                    Target::Company(company),
-                    bilibi_templates::LANGUAGE,
-                )
-                .await?;
-            let selected = self
-                .templates
-                .resolve_print(
-                    &**client,
-                    scope,
-                    KEY,
-                    Some(company),
-                    language.value.as_str().unwrap_or("en"),
-                    None,
-                )
-                .await?;
-            let layout = CONTRACT
-                .compile(&selected.language, &selected.layout)
-                .map_err(|_| Error::Invalid)?;
+                .map_err(download_error)?;
+            let (order, plan) = orders::get_traveller(&**client, scope, company.get(), id)
+                .await
+                .map_err(download_error)?;
             let accent = self.branding.accent(&**client).await?;
             let header = PrintOrder {
                 code: &order.code,
@@ -189,13 +224,11 @@ impl Download<Scope, Error> for TravellerDownload {
                 routing_version: order.routing_version,
                 demand_ref: order.demand_ref.as_deref(),
             };
-            let document = inline(
-                &layout,
-                &header,
-                &order.traveller,
-                &selected.language,
-                accent,
-            )?;
+            let document = self
+                .production
+                .traveller_layouts
+                .document(&**client, scope, company, &header, &plan, accent)
+                .await?;
             let pdf = self
                 .artifacts
                 .print_document(&client, document)
@@ -207,6 +240,14 @@ impl Download<Scope, Error> for TravellerDownload {
                 &format!("work-order-{id}.pdf"),
             ))
         })
+    }
+}
+
+fn download_error(error: crate::Error) -> Error {
+    match error {
+        crate::Error::Access(error) => error,
+        crate::Error::OrderNotFound => Error::NotFound,
+        _ => Error::Internal,
     }
 }
 

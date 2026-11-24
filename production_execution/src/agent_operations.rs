@@ -264,12 +264,12 @@ impl Write {
         let company = id(input, "company_id")?;
         match self {
             Self::Order => {
-                let order = owner
+                let (order, traveller) = owner
                     .create_order_on(tx, scope, company, &new_order(input)?)
                     .await
                     .map_err(refuse)?;
                 let mut value = order_json(&order);
-                value["work_plan"] = json!(order.traveller);
+                value["work_plan"] = json!(traveller);
                 if review {
                     value.as_object_mut().expect("object").remove("id");
                 }

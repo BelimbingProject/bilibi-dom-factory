@@ -1,7 +1,9 @@
 use bilibi_agent_api::{Handler, Registry};
 use bilibi_database::{Error, MutationBoundary};
 use bilibi_factory_product_definition::ProductDefinition;
-use bilibi_factory_production_execution::Order;
+use bilibi_factory_production_execution::{
+    NewOrder, Order, ProductionExecution, WorkInstruction, WorkPlan,
+};
 use bilibi_settings::{Settings, Target};
 use bilibi_tenancy::Scope;
 use bilibi_ui::download::{DownloadRequest, DownloadService};
@@ -166,6 +168,99 @@ pub(super) async fn run(
         "Turutan",
         (612.0, 792.0),
     )?;
+    let codes: Vec<_> = (1..=66)
+        .map(|sequence| format!("step-{sequence}"))
+        .collect();
+    let step = earlier
+        .operations
+        .first()
+        .ok_or("missing routing operations")?;
+    let large_routing: Vec<_> = codes
+        .iter()
+        .enumerate()
+        .map(|(index, code)| {
+            json!({
+                "code": code,
+                "sequence": index + 1,
+                "inputs": step.inputs,
+                "outputs": step.outputs,
+                "allowed_resource_ids": step.allowed_resource_ids,
+            })
+        })
+        .collect();
+    let large_routing = definitions
+        .publish_routing(
+            manager,
+            1,
+            order.product_id,
+            &json!({"operations":large_routing}),
+        )
+        .await?;
+
+    let current = registry
+        .read(
+            &app.db,
+            admin,
+            "base.templates.print.get",
+            &json!({"key":key,"company_id":1,"language":"ms"}),
+        )
+        .await?;
+    let paragraph = json!({"type":"paragraph","text":"'".repeat(2_000)});
+    layout["blocks"]
+        .as_array_mut()
+        .ok_or("missing traveller blocks")?
+        .extend(std::iter::repeat_n(paragraph, 23));
+    let input = json!({
+        "key":key, "company_id":1, "language":"ms", "layout":layout.to_string(),
+        "review":current["result"]["print"]["review"],
+    });
+    let mut client = app.db.get().await?;
+    let mut tx = boundary
+        .begin(&mut client, admin.mutation_context(operation))
+        .await?;
+    publish.preview(tx.sql(), admin, &input).await?;
+    publish.commit(&mut tx, admin, &input).await?;
+    tx.commit().await?;
+    drop(client);
+
+    let production = app
+        .services
+        .get::<ProductionExecution>(bilibi_factory_production_execution::SERVICE)?;
+    let large_order = production
+        .create_order(
+            manager,
+            1,
+            &NewOrder {
+                code: "ORD-LAYOUT-BUDGET".into(),
+                kind: order.kind,
+                product_id: order.product_id,
+                formula_version: order.formula_version,
+                routing_version: large_routing.version,
+                demand_ref: None,
+                work_plan: WorkPlan {
+                    instructions: codes
+                        .into_iter()
+                        .map(|operation| WorkInstruction {
+                            operation,
+                            instructions: "'".repeat(10_000),
+                        })
+                        .collect(),
+                    ..WorkPlan::default()
+                },
+            },
+        )
+        .await?;
+    let large_path = HashMap::from([("id".into(), large_order.id.to_string())]);
+    let large = download
+        .0
+        .serve(DownloadRequest {
+            path: &large_path,
+            ..request(viewer)
+        })
+        .await?;
+    let fallback_path = folder.join("work-traveller-fallback.pdf");
+    std::fs::write(&fallback_path, &large.bytes)?;
+    check_paper(&fallback_path, (595.0, 842.0))?;
     println!("Travellers printed from order {} before and after the newer routing; the other tenant was refused.", order.id);
     Ok(())
 }
@@ -187,15 +282,34 @@ fn check_pdf(
         .collect();
     let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
     let routing = format!("{routing_label} 1");
+    let expected_instruction = format!(
+        "{}Final checkpoint: verify the final material identification.",
+        "Record the inspection result and compare it with the assembly sheet. ".repeat(35)
+    );
+    let without_table_headers = text
+        .lines()
+        .filter(|line| line.split_whitespace().next() != Some(sequence_label))
+        .flat_map(str::split_whitespace)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let blend_instruction = without_table_headers
+        .split_once("1 blend ")
+        .and_then(|(_, rest)| rest.split_once(" 2 make"))
+        .map(|(instruction, _)| instruction);
     if steps != [(1, "blend"), (2, "make"), (3, "fails")]
         || !normalized.contains(heading)
         || !normalized.contains(sequence_label)
         || !normalized.contains(&routing)
-        || !normalized.contains("Final checkpoint: verify the final material identification.")
+        || blend_instruction != Some(expected_instruction.as_str())
     {
         return Err(format!("{} has unexpected traveller text", path.display()).into());
     }
 
+    check_paper(path, paper)?;
+    Ok(text)
+}
+
+fn check_paper(path: &Path, paper: (f64, f64)) -> Result<(), Box<dyn std::error::Error>> {
     let metadata = poppler("pdfinfo", &[], path, &[])?;
     let size = metadata
         .lines()
@@ -210,7 +324,7 @@ fn check_pdf(
     if (width - paper.0).abs() > 1.0 || (height - paper.1).abs() > 1.0 {
         return Err(format!("{} has unexpected paper dimensions", path.display()).into());
     }
-    Ok(text)
+    Ok(())
 }
 
 fn poppler(
