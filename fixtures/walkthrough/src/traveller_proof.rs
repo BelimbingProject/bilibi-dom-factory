@@ -173,8 +173,9 @@ pub(super) async fn run(
         .collect();
     let step = earlier
         .operations
-        .first()
-        .ok_or("missing routing operations")?;
+        .iter()
+        .find(|step| step.code == "blend")
+        .ok_or("missing fixture step that outputs the finished item")?;
     let large_routing: Vec<_> = codes
         .iter()
         .enumerate()
