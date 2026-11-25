@@ -1,0 +1,59 @@
+{
+  "blocks": [
+    {
+      "type": "heading",
+      "text": "Work order traveller"
+    },
+    {
+      "type": "field",
+      "field": "number"
+    },
+    {
+      "type": "field",
+      "field": "kind"
+    },
+    {
+      "type": "field",
+      "field": "issuer"
+    },
+    {
+      "type": "field",
+      "field": "product"
+    },
+    {
+      "type": "field",
+      "field": "quantity"
+    },
+    {
+      "type": "field",
+      "field": "due_on"
+    },
+    {
+      "type": "field",
+      "field": "formula"
+    },
+    {
+      "type": "field",
+      "field": "routing"
+    },
+    {
+      "type": "field",
+      "field": "demand"
+    },
+    {
+      "type": "table",
+      "rows": "operations",
+      "columns": [
+        {
+          "field": "sequence"
+        },
+        {
+          "field": "operation"
+        },
+        {
+          "field": "instructions"
+        }
+      ]
+    }
+  ]
+}

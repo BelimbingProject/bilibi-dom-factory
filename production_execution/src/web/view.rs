@@ -62,10 +62,18 @@ impl Floor {
                         ..bilibi_ui::Button::default()
                     })?);
                 }
+                let mut actions = s::button("Orders", "back_to_orders", "", false)?;
+                actions.push(&s::render(bilibi_ui::ActionLink {
+                    id: "print-work-order",
+                    title: "Print work order traveller",
+                    href: &format!("/factory/orders/{}/traveller.pdf", order.id),
+                    body: Html::text("Print traveller"),
+                    ..bilibi_ui::ActionLink::default()
+                })?);
                 body.push(&s::render(s::Picker {
                     id: "floor-runs",
                     title: &format!("Runs of {}", order.code),
-                    actions: s::button("Orders", "back_to_orders", "", false)?,
+                    actions,
                     buttons: choices,
                     empty: s::render(EmptyState::missing(
                         "No runs",

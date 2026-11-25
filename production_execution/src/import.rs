@@ -105,7 +105,7 @@ impl Importer<'_> {
                     .mutation_context("factory.production_execution.import_order"),
             )
             .await?;
-        let order = self
+        let (order, _) = self
             .owner
             .create_order_for_on(
                 &mut tx,

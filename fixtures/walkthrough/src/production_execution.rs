@@ -18,6 +18,7 @@ use bilibi_factory_product_definition::{
 };
 use bilibi_factory_production_execution::{
     Approver, Completion, HoldOverrideRequest, NewOrder, OrderKind, ProductionExecution, Source,
+    WorkInstruction, WorkPlan,
 };
 use bilibi_tenancy::Scope;
 use serde_json::json;
@@ -136,12 +137,20 @@ async fn main() -> Result<(), Error> {
              INSERT INTO user_desks(tenant_id,person_id,company_id) SELECT 1,person_id,1 FROM users WHERE tenant_id=1 AND id=2 ON CONFLICT DO NOTHING;",
         )
         .await?;
+    db.get().await?.batch_execute(
+        "INSERT INTO persons(id,tenant_id,name,code,kind,email) VALUES(5,1,'Alex Admin','factory_admin','human','admin@example.test') ON CONFLICT DO NOTHING;
+         UPDATE users SET person_id=5 WHERE tenant_id=1 AND id=4 AND person_id IS NULL;
+         INSERT INTO user_desks(tenant_id,person_id,company_id) SELECT 1,person_id,1 FROM users WHERE tenant_id=1 AND id=4 ON CONFLICT DO NOTHING;",
+    ).await?;
     let (manager, _) = login(&app, "manager@example.test").await?;
     let (viewer, _) = login(&app, "viewer@example.test").await?;
     let (staff, _) = login(&app, "staff@example.test").await?;
     let (admin, admin_token) = login(&app, "admin@example.test").await?;
     let (other, _) = login(&app, "manager@other.example.test").await?;
-    let client = db.get().await?;
+    // Observe committed owner writes on a connection outside their transactions.
+    let client = db
+        .try_get_detached("production walkthrough inspects committed rows")
+        .await?;
     let count = |table: &'static str| {
         let client = &client;
         async move {
@@ -243,13 +252,8 @@ async fn main() -> Result<(), Error> {
             &manager,
             1,
             &NewDefinition {
-                product_id: core_products::goods(
-                    &**db.get().await?,
-                    manager.tenant(),
-                    "P-1",
-                    "Product one",
-                )
-                .await?,
+                product_id: core_products::goods(&**client, manager.tenant(), "P-1", "Product one")
+                    .await?,
                 item_id: product_item,
             },
         )
@@ -272,9 +276,9 @@ async fn main() -> Result<(), Error> {
         1,
         product.product_id,
         &json!({"operations":[
+            {"code":"fails","sequence":3,"inputs":[free],"outputs":[trim],"allowed_resource_ids":[r1]},
             {"code":"blend","sequence":1,"inputs":[held,free],"outputs":[product_item,trim],"allowed_resource_ids":[r1]},
-            {"code":"make","sequence":2,"inputs":[],"outputs":[product_item,held],"allowed_resource_ids":[r1,r2]},
-            {"code":"fails","sequence":3,"inputs":[free],"outputs":[trim],"allowed_resource_ids":[r1]}
+            {"code":"make","sequence":2,"inputs":[],"outputs":[product_item,held],"allowed_resource_ids":[r1,r2]}
         ]}),
     )
     .await?;
@@ -288,7 +292,7 @@ async fn main() -> Result<(), Error> {
             1,
             &NewDefinition {
                 product_id: core_products::goods(
-                    &**db.get().await?,
+                    &**client,
                     manager.tenant(),
                     "P-RULE",
                     "Rule product",
@@ -351,6 +355,19 @@ async fn main() -> Result<(), Error> {
 
     println!("== orders");
     let new_order = NewOrder {
+        work_plan: WorkPlan {
+            target_quantity: Some("14.25".into()),
+            target_unit_id: Some(kg.id),
+            due_on: Some("2026-12-02".into()),
+            instructions: vec![WorkInstruction {
+                operation: "blend".into(),
+                instructions: format!(
+                    "{}\nFinal checkpoint: verify the final material identification.",
+                    "Record the inspection result and compare it with the assembly sheet.\n"
+                        .repeat(35)
+                ),
+            }],
+        },
         code: "ORD-1".into(),
         kind: OrderKind::Order,
         product_id: product.product_id,
@@ -367,11 +384,25 @@ async fn main() -> Result<(), Error> {
             && order.demand_ref.as_deref() == Some("demand-7")
             && pe.get_order(&viewer, 1, order.id).await? == order,
     )?;
+    if let Ok(folder) = std::env::var("FACTORY_TRAVELLER_PROOF_DIR") {
+        traveller_proof::run(
+            &app,
+            &admin,
+            &manager,
+            &viewer,
+            &other,
+            &order,
+            std::path::Path::new(&folder),
+        )
+        .await?;
+        return Ok(());
+    }
     let batch = pe
         .create_order(
             &manager,
             1,
             &NewOrder {
+                work_plan: Default::default(),
                 code: "BATCH-1".into(),
                 kind: OrderKind::Batch,
                 demand_ref: None,
@@ -399,6 +430,7 @@ async fn main() -> Result<(), Error> {
             &manager,
             1,
             &NewOrder {
+                work_plan: Default::default(),
                 code: " ".into(),
                 ..new_order.clone()
             },
@@ -412,6 +444,7 @@ async fn main() -> Result<(), Error> {
             &manager,
             1,
             &NewOrder {
+                work_plan: Default::default(),
                 code: "ORD-X".into(),
                 formula_version: 9,
                 ..new_order.clone()
@@ -426,6 +459,7 @@ async fn main() -> Result<(), Error> {
             &viewer,
             1,
             &NewOrder {
+                work_plan: Default::default(),
                 code: "ORD-V".into(),
                 ..new_order.clone()
             },
@@ -553,11 +587,21 @@ async fn main() -> Result<(), Error> {
         "Request id conflict",
     )?;
     let race = blend("run-race", aged_2);
+    let other_live = {
+        let pe = pe.clone();
+        let scope = manager.clone();
+        let request = race.clone();
+        let order_id = order.id;
+        tokio::spawn(async move {
+            pe.complete_operation(&scope, 1, order_id, Source::Live, &request)
+                .await
+        })
+    };
     let (a, b) = tokio::join!(
-        pe.complete_operation(&manager, 1, order.id, Source::Live, &race),
+        other_live,
         pe.complete_operation(&manager, 1, order.id, Source::Live, &race),
     );
-    let (a, b) = (a?, b?);
+    let (a, b) = (a??, b?);
     verify(
         "concurrent identical retries record one execution",
         a.id == b.id && count("factory_operation_executions").await? == 2,
@@ -875,6 +919,7 @@ async fn main() -> Result<(), Error> {
                 &manager,
                 1,
                 &NewOrder {
+                    work_plan: Default::default(),
                     code: "ORD-RULE".into(),
                     product_id: bad.product_id,
                     ..new_order.clone()
@@ -1226,6 +1271,7 @@ async fn main() -> Result<(), Error> {
             &principal,
             1,
             &NewOrder {
+                work_plan: Default::default(),
                 code: "ORD-NORMAL-REFUSED".into(),
                 ..new_order.clone()
             },
@@ -1451,6 +1497,7 @@ async fn main() -> Result<(), Error> {
         "import stays in its tenant",
         pe.importer(&principal, foreign_company)?
             .create_order(&NewOrder {
+                work_plan: Default::default(),
                 code: "FOREIGN-IMPORT".into(),
                 ..new_order.clone()
             })
@@ -1508,6 +1555,7 @@ async fn main() -> Result<(), Error> {
         "import cannot create in an archived company",
         importer
             .create_order(&NewOrder {
+                work_plan: Default::default(),
                 code: "ARCHIVED-IMPORT".into(),
                 ..new_order.clone()
             })
@@ -1555,6 +1603,7 @@ async fn main() -> Result<(), Error> {
         "retained import access cannot create after revocation",
         importer
             .create_order(&NewOrder {
+                work_plan: Default::default(),
                 code: "AFTER-REVOKE".into(),
                 ..new_order.clone()
             })
@@ -1613,11 +1662,21 @@ async fn main() -> Result<(), Error> {
         }],
         ..blend("existing-output-transform", aged)
     };
+    let other_import = {
+        let pe = pe.clone();
+        let scope = admin.clone();
+        let request = addition.clone();
+        let order_id = order.id;
+        tokio::spawn(async move {
+            pe.complete_operation(&scope, 1, order_id, Source::Import, &request)
+                .await
+        })
+    };
     let (left, right) = tokio::join!(
-        pe.complete_operation(&admin, 1, order.id, Source::Import, &addition),
+        other_import,
         pe.complete_operation(&admin, 1, order.id, Source::Import, &addition),
     );
-    let (added, retried) = (left?, right?);
+    let (added, retried) = (left??, right?);
     let addition_posting = inventory
         .get_transaction(&manager, 1, added.inventory_transaction_id)
         .await?;
@@ -1923,3 +1982,5 @@ async fn main() -> Result<(), Error> {
 
 // Import-only read proof; kept separate from the completion scenarios.
 mod import_reads;
+
+mod traveller_proof;

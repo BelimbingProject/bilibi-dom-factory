@@ -21,6 +21,9 @@ mod measurements;
 mod model;
 mod orders;
 mod outcomes;
+mod traveller;
+mod traveller_layout;
+mod traveller_pdf;
 mod wastage;
 mod web;
 pub use error::Error;
@@ -30,6 +33,7 @@ pub use model::{
     Order, OrderKind, Source,
 };
 pub use outcomes::{ProductionTrace, RunYield, TraceOrder, TraceRun, UnitYield, YieldBalance};
+pub use traveller::{WorkInstruction, WorkPlan};
 
 const PAGES: &str = "factory/production_execution.pages";
 pub const SERVICE: &str = "factory/production_execution.production_execution";
@@ -54,6 +58,7 @@ pub struct ProductionExecution {
     mutations: Arc<MutationBoundary>,
     product_definition: Arc<ProductDefinition>,
     completer: completion::Completer,
+    traveller_layouts: traveller_pdf::TravellerLayouts,
 }
 
 impl ProductionExecution {
@@ -83,7 +88,7 @@ impl ProductionExecution {
             )
             .await?;
         match self.create_order_on(&mut tx, scope, company, new).await {
-            Ok(order) => {
+            Ok((order, _)) => {
                 tx.commit().await?;
                 Ok(order)
             }
@@ -100,7 +105,7 @@ impl ProductionExecution {
         scope: &Scope,
         company: i64,
         new: &NewOrder,
-    ) -> Result<Order> {
+    ) -> Result<(Order, traveller::Traveller)> {
         self.create_order_for_on(tx, scope, company, new, Source::Live)
             .await
     }
@@ -112,7 +117,7 @@ impl ProductionExecution {
         company: i64,
         new: &NewOrder,
         source: Source,
-    ) -> Result<Order> {
+    ) -> Result<(Order, traveller::Traveller)> {
         bilibi_company::authorize_work_target(
             tx.sql(),
             scope,
@@ -125,20 +130,23 @@ impl ProductionExecution {
         )
         .await?;
         bilibi_company::require_writable(tx.sql(), scope, company, true).await?;
-        if source == Source::Import {
-            let import = self
-                .completer
-                .inventory
-                .production_import(scope, company, &AUTHORITY)?;
+        let import = (source == Source::Import)
+            .then(|| {
+                self.completer
+                    .inventory
+                    .production_import(scope, company, &AUTHORITY)
+            })
+            .transpose()?;
+        let picked = if let Some(import) = &import {
             self.product_definition
                 .select_import_revisions_on(
                     tx.sql(),
-                    &import,
+                    import,
                     new.product_id,
                     new.formula_version,
                     new.routing_version,
                 )
-                .await?;
+                .await?
         } else {
             self.product_definition
                 .select_revisions_on(
@@ -149,8 +157,8 @@ impl ProductionExecution {
                     new.formula_version,
                     new.routing_version,
                 )
-                .await?;
-        }
+                .await?
+        };
         let field = |field, message| Error::Invalid { field, message };
         if new.code.trim().is_empty() {
             return Err(field("Code", "can't be blank"));
@@ -176,6 +184,20 @@ impl ProductionExecution {
             {
                 return Err(field("Code", "has already been taken"));
             }
+        let traveller = self
+            .freeze_traveller(
+                tx.sql(),
+                scope,
+                company,
+                import.as_ref(),
+                picked,
+                &new.work_plan,
+            )
+            .await?;
+        self.traveller_layouts
+            .validate(tx.sql(), scope, company, new, &traveller)
+            .await?;
+        let snapshot = serde_json::to_value(&traveller)?;
         let tenant = scope.tenant();
         let new = new.clone();
         let id = tx
@@ -183,8 +205,13 @@ impl ProductionExecution {
                     Box::pin(async move {
                         let row = sql
                             .query_one(
-                                "INSERT INTO factory_production_orders(tenant_id,company_id,code,kind,product_id,formula_version,routing_version,demand_ref) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id,to_jsonb(factory_production_orders) AS saved",
-                                &[&tenant, &company, &new.code, &new.kind.name(), &new.product_id, &new.formula_version, &new.routing_version, &new.demand_ref],
+                                "INSERT INTO factory_production_orders(tenant_id,company_id,code,kind,product_id,formula_version,routing_version,demand_ref,traveller) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id,
+                                    (to_jsonb(factory_production_orders) - 'traveller') ||
+                                    jsonb_build_object('traveller', jsonb_build_object(
+                                        'line_count', jsonb_array_length(traveller->'operations'),
+                                        'fingerprint', encode(sha256(convert_to(traveller::text,'UTF8')),'hex')
+                                    )) AS saved",
+                                &[&tenant, &company, &new.code, &new.kind.name(), &new.product_id, &new.formula_version, &new.routing_version, &new.demand_ref, &snapshot],
                             )
                             .await?;
                         let id: i64 = row.get("id");
@@ -200,7 +227,10 @@ impl ProductionExecution {
                     })
                 })
                 .await?;
-        orders::get_order(tx.sql(), scope, company, id).await
+        Ok((
+            orders::get_order(tx.sql(), scope, company, id).await?,
+            traveller,
+        ))
     }
 
     pub async fn get_order(&self, scope: &Scope, company: i64, order_id: i64) -> Result<Order> {
@@ -332,10 +362,11 @@ impl ProductionExecution {
 
 inventory::submit! { Module {
     id: "factory/production_execution", layer: Layer::Domains,
-    dependencies: &["base/agent_api","base/authz","base/database","base/datetime","base/locale","base/menu","base/module_registry","base/tenancy","base/ui","core/company","core/user","factory/inventory","factory/product_definition"],
+    dependencies: &["base/agent_api","base/artifacts","base/branding","base/party_ids","base/settings","base/templates","base/authz","base/database","base/datetime","base/locale","base/menu","base/module_registry","base/tenancy","base/ui","core/company","core/user","factory/inventory","factory/product_definition"],
     migrations: &[("factory-production-execution-001-orders-executions",include_str!("../migrations/001-orders-executions.sql")),
         ("factory-production-execution-002-shop-floor-capture",include_str!("../migrations/002-shop-floor-capture.sql")),
-        ("factory-production-execution-003-execution-range-index",include_str!("../migrations/003-execution-range-index.sql"))],
+        ("factory-production-execution-003-execution-range-index",include_str!("../migrations/003-execution-range-index.sql")),
+        ("factory-production-execution-004-traveller",include_str!("../migrations/003-traveller.sql"))],
     services: &[Service { id:SERVICE, factory: |services| {
         let db = services.get::<Db>("base/database.pool")?.as_ref().clone();
         let mutations: Arc<MutationBoundary> = services.get("base/database.mutations")?;
@@ -346,9 +377,21 @@ inventory::submit! { Module {
             mutations: mutations.clone(),
             product_definition: product_definition.clone(),
             completer: completion::Completer { db, mutations, inventory, product_definition },
+            traveller_layouts: traveller_pdf::TravellerLayouts {
+                branding: services.get(bilibi_branding::SERVICE)?,
+                templates: services.get(bilibi_templates::SERVICE)?,
+                settings: services.get("base/settings.store")?,
+            },
         });
         agent_operations::bind(owner.clone())?;
         Ok(owner)
+    } }, Service { id: traveller_pdf::SERVICE, factory: |services| {
+        Ok(Arc::new(bilibi_ui::download::DownloadService::<Scope, bilibi_database::Error>(
+            Arc::new(traveller_pdf::TravellerDownload {
+                production: services.get(SERVICE)?,
+                artifacts: services.get("base/artifacts.store")?,
+            })
+        )))
     } }, Service { id:PAGES, factory: |services| Ok(Arc::new(bilibi_ui::page::PageService::<Scope, bilibi_database::Error>(Arc::new(web::Pages {
         db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
         execution: services.get(SERVICE)?,
