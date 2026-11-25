@@ -168,7 +168,7 @@ pub(super) async fn run(
         "Turutan",
         (612.0, 792.0),
     )?;
-    let codes: Vec<_> = (1..=66)
+    let codes: Vec<_> = (1..=17)
         .map(|sequence| format!("step-{sequence}"))
         .collect();
     let step = earlier
@@ -220,6 +220,15 @@ pub(super) async fn run(
         .await?;
     publish.preview(tx.sql(), admin, &input).await?;
     publish.commit(&mut tx, admin, &input).await?;
+    settings
+        .put(
+            &mut tx,
+            admin,
+            Target::Global,
+            "artifacts.max_bytes",
+            json!(1_048_576),
+        )
+        .await?;
     tx.commit().await?;
     drop(client);
 
@@ -242,7 +251,10 @@ pub(super) async fn run(
                         .into_iter()
                         .map(|operation| WorkInstruction {
                             operation,
-                            instructions: "'".repeat(10_000),
+                            instructions: format!(
+                                "{}\nKeep the final inspection record.",
+                                "'".repeat(10_000)
+                            ),
                         })
                         .collect(),
                     ..WorkPlan::default()
@@ -261,6 +273,16 @@ pub(super) async fn run(
     let fallback_path = folder.join("work-traveller-fallback.pdf");
     std::fs::write(&fallback_path, &large.bytes)?;
     check_paper(&fallback_path, (595.0, 842.0))?;
+    let text = poppler("pdftotext", &["-layout"], &fallback_path, &["-"])?;
+    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.matches('\'').count() != 170_000
+        || normalized
+            .matches("Keep the final inspection record.")
+            .count()
+            != 17
+    {
+        return Err("the packaged fallback lost instruction text".into());
+    }
     println!("Travellers printed from order {} before and after the newer routing; the other tenant was refused.", order.id);
     Ok(())
 }

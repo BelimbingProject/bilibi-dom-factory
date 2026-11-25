@@ -26,10 +26,10 @@ const KIND: &str = "work-order-traveller";
 pub(crate) struct TravellerDownload {
     pub(crate) production: Arc<ProductionExecution>,
     pub(crate) artifacts: Arc<Artifacts>,
-    pub(crate) branding: Arc<Branding>,
 }
 
 pub(crate) struct TravellerLayouts {
+    pub(crate) branding: Arc<Branding>,
     pub(crate) templates: Arc<Templates>,
     pub(crate) settings: Arc<Settings>,
 }
@@ -41,12 +41,13 @@ struct PrintOrder<'a> {
     formula_version: i32,
     routing_version: i32,
     demand_ref: Option<&'a str>,
+    accent: bilibi_ui::Accent,
 }
 
 impl TravellerLayouts {
     pub(crate) async fn validate(
         &self,
-        client: &dyn ReadClient,
+        client: &(impl tokio_postgres::GenericClient + Sync),
         scope: &Scope,
         company: i64,
         new: &NewOrder,
@@ -59,8 +60,9 @@ impl TravellerLayouts {
             formula_version: new.formula_version,
             routing_version: new.routing_version,
             demand_ref: new.demand_ref.as_deref(),
+            accent: self.branding.accent(client).await?,
         };
-        let accent = bilibi_ui::Accent::default();
+        let limit = self.html_limit(client).await?;
         let invalid = || crate::Error::Invalid {
             field: "Traveller",
             message: "exceeds the print contract or contains invalid facts",
@@ -69,16 +71,30 @@ impl TravellerLayouts {
             let layout = CONTRACT
                 .compile(default.language, default.layout)
                 .map_err(|_| invalid())?;
-            inline(&layout, &order, plan, default.language, accent).map_err(|_| invalid())?;
+            let document =
+                inline(&layout, &order, plan, default.language).map_err(|_| invalid())?;
+            if document.html().len() > limit {
+                return Err(invalid());
+            }
         }
         let company = OrganisationId::new(company).map_err(|_| Error::Invalid)?;
-        self.document(client, scope, company, &order, plan, accent)
+        self.document(client, scope, company, &order, plan, limit)
             .await
             .map_err(|error| match error {
                 Error::Invalid => invalid(),
                 error => error.into(),
             })?;
         Ok(())
+    }
+
+    async fn html_limit(&self, client: &dyn ReadClient) -> Result<usize> {
+        self.settings
+            .get_global(client, "artifacts.max_bytes")
+            .await?
+            .as_u64()
+            .and_then(|limit| usize::try_from(limit).ok())
+            .filter(|limit| *limit > 0)
+            .ok_or(Error::Invalid)
     }
 
     async fn document(
@@ -88,7 +104,7 @@ impl TravellerLayouts {
         company: OrganisationId,
         order: &PrintOrder<'_>,
         plan: &Traveller,
-        accent: bilibi_ui::Accent,
+        limit: usize,
     ) -> Result<bilibi_artifacts::InlineDocument> {
         let language = self
             .settings
@@ -107,22 +123,26 @@ impl TravellerLayouts {
         let layout = CONTRACT
             .compile(&selected.language, &selected.layout)
             .map_err(|_| Error::Invalid)?;
-        let document = inline(&layout, order, plan, &selected.language, accent);
-        match document {
-            Err(problem)
-                if problem.field == "layout"
-                    && !matches!(selected.origin, Origin::Packaged { .. }) =>
-            {
-                let packaged = CONTRACT
-                    .packaged(requested, None)
-                    .map_err(|_| Error::Invalid)?;
-                let layout = CONTRACT
-                    .compile(&packaged.language, &packaged.layout)
-                    .map_err(|_| Error::Invalid)?;
-                inline(&layout, order, plan, &packaged.language, accent).map_err(|_| Error::Invalid)
-            }
-            other => other.map_err(|_| Error::Invalid),
+        match inline(&layout, order, plan, &selected.language) {
+            Ok(document) if document.html().len() <= limit => return Ok(document),
+            Err(problem) if problem.field != "layout" => return Err(Error::Invalid),
+            _ => {}
         }
+        if matches!(selected.origin, Origin::Packaged { .. }) {
+            return Err(Error::Invalid);
+        }
+        let packaged = CONTRACT
+            .packaged(requested, None)
+            .map_err(|_| Error::Invalid)?;
+        let layout = CONTRACT
+            .compile(&packaged.language, &packaged.layout)
+            .map_err(|_| Error::Invalid)?;
+        let document =
+            inline(&layout, order, plan, &packaged.language).map_err(|_| Error::Invalid)?;
+        if document.html().len() > limit {
+            return Err(Error::Invalid);
+        }
+        Ok(document)
     }
 }
 
@@ -131,7 +151,6 @@ fn inline(
     order: &PrintOrder<'_>,
     plan: &Traveller,
     language: &str,
-    accent: bilibi_ui::Accent,
 ) -> std::result::Result<bilibi_artifacts::InlineDocument, Problem> {
     let malay = language.split('-').next() == Some("ms");
     let kind = match (malay, order.kind) {
@@ -190,7 +209,7 @@ fn inline(
     if let Some(demand) = order.demand_ref.filter(|text| !text.trim().is_empty()) {
         facts.push(("demand", PrintValue::Text(demand)));
     }
-    layout.document(order.kind.name(), &facts, accent)
+    layout.document(order.kind.name(), &facts, order.accent)
 }
 
 impl Download<Scope, Error> for TravellerDownload {
@@ -215,7 +234,8 @@ impl Download<Scope, Error> for TravellerDownload {
             let (order, plan) = orders::get_traveller(&**client, scope, company.get(), id)
                 .await
                 .map_err(download_error)?;
-            let accent = self.branding.accent(&**client).await?;
+            let layouts = &self.production.traveller_layouts;
+            let accent = layouts.branding.accent(&**client).await?;
             let header = PrintOrder {
                 code: &order.code,
                 kind: order.kind,
@@ -223,11 +243,11 @@ impl Download<Scope, Error> for TravellerDownload {
                 formula_version: order.formula_version,
                 routing_version: order.routing_version,
                 demand_ref: order.demand_ref.as_deref(),
+                accent,
             };
-            let document = self
-                .production
-                .traveller_layouts
-                .document(&**client, scope, company, &header, &plan, accent)
+            let limit = layouts.html_limit(&**client).await?;
+            let document = layouts
+                .document(&**client, scope, company, &header, &plan, limit)
                 .await?;
             let pdf = self
                 .artifacts

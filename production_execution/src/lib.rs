@@ -205,7 +205,12 @@ impl ProductionExecution {
                     Box::pin(async move {
                         let row = sql
                             .query_one(
-                                "INSERT INTO factory_production_orders(tenant_id,company_id,code,kind,product_id,formula_version,routing_version,demand_ref,traveller) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id,to_jsonb(factory_production_orders) AS saved",
+                                "INSERT INTO factory_production_orders(tenant_id,company_id,code,kind,product_id,formula_version,routing_version,demand_ref,traveller) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id,
+                                    (to_jsonb(factory_production_orders) - 'traveller') ||
+                                    jsonb_build_object('traveller', jsonb_build_object(
+                                        'line_count', jsonb_array_length(traveller->'operations'),
+                                        'fingerprint', encode(sha256(convert_to(traveller::text,'UTF8')),'hex')
+                                    )) AS saved",
                                 &[&tenant, &company, &new.code, &new.kind.name(), &new.product_id, &new.formula_version, &new.routing_version, &new.demand_ref, &snapshot],
                             )
                             .await?;
@@ -373,6 +378,7 @@ inventory::submit! { Module {
             product_definition: product_definition.clone(),
             completer: completion::Completer { db, mutations, inventory, product_definition },
             traveller_layouts: traveller_pdf::TravellerLayouts {
+                branding: services.get(bilibi_branding::SERVICE)?,
                 templates: services.get(bilibi_templates::SERVICE)?,
                 settings: services.get("base/settings.store")?,
             },
@@ -384,7 +390,6 @@ inventory::submit! { Module {
             Arc::new(traveller_pdf::TravellerDownload {
                 production: services.get(SERVICE)?,
                 artifacts: services.get("base/artifacts.store")?,
-                branding: services.get(bilibi_branding::SERVICE)?,
             })
         )))
     } }, Service { id:PAGES, factory: |services| Ok(Arc::new(bilibi_ui::page::PageService::<Scope, bilibi_database::Error>(Arc::new(web::Pages {
