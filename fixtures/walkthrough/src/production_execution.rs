@@ -1973,7 +1973,7 @@ async fn main() -> Result<(), Error> {
         &admin,
         &manager,
         &principal,
-        (product_item, imported.id, output_identity),
+        (product_item, imported.id, output_identity, [aged, free_lot]),
     )
     .await?;
     println!("production execution walkthrough complete");

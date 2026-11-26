@@ -2,7 +2,7 @@
 use super::{decimal, refusal, verify, Error};
 use bilibi_authz::grants::Grants;
 use bilibi_factory_inventory::{Inventory, NewUnit};
-use bilibi_factory_production_execution::ProductionExecution;
+use bilibi_factory_production_execution::{ProductionExecution, ProductionTrace};
 use bilibi_tenancy::Scope;
 use std::time::Duration;
 use tokio::time::timeout;
@@ -12,10 +12,10 @@ pub(super) async fn run(
     admin: &Scope,
     manager: &Scope,
     principal: &Scope,
-    evidence: (i64, i64, i64),
+    evidence: (i64, i64, i64, [i64; 2]),
 ) -> Result<(), Error> {
     println!("== import-only material, conversion, yield and backward trace reads");
-    let (material, execution, identity) = evidence;
+    let (material, execution, identity, inputs) = evidence;
     let inventory = app
         .services
         .get::<Inventory>(bilibi_factory_inventory::SERVICE)?;
@@ -134,16 +134,29 @@ pub(super) async fn run(
             .set_direct(admin, manager.user(), capability, None)
             .await?;
     }
+    let verify_trace = |label, trace: &ProductionTrace| {
+        verify(
+            label,
+            trace.material.root.id == identity
+                && trace.runs.iter().any(|run| run.id == execution)
+                && inputs.iter().all(|input| {
+                    trace.material.identities.iter().any(|lot| lot.id == *input)
+                        && trace.material.links.iter().any(|link| {
+                            link.input_identity_id == *input && link.output_identity_id == identity
+                        })
+                }),
+        )
+    };
     let trace = importer.trace_backward(identity).await?;
-    verify(
-        "import trace includes source lots and enriched production runs",
-        trace.material.identities.len() > 1
-            && !trace.material.links.is_empty()
-            && trace.runs.iter().any(|run| run.id == execution),
+    verify_trace("import trace includes both source lots and the run", &trace)?;
+    let ordinary_trace = pe.trace_backward(manager, 1, identity).await?;
+    verify_trace(
+        "ordinary trace includes both source lots and the run",
+        &ordinary_trace,
     )?;
     verify(
         "import backward trace matches ordinary genealogy and resources",
-        format!("{trace:?}") == format!("{:?}", pe.trace_backward(manager, 1, identity).await?),
+        format!("{trace:?}") == format!("{ordinary_trace:?}"),
     )?;
 
     // Exercise the two clients held by reviewed import: a preview transaction and
@@ -180,12 +193,9 @@ pub(super) async fn run(
                 .await,
             "Conversion not found",
         )?;
-        verify(
-            "preview imported lot trace includes runs",
-            format!(
-                "{:?}",
-                importer.trace_backward_on(preview_client, identity).await?
-            ) == format!("{trace:?}"),
+        verify_trace(
+            "preview import trace includes both source lots and the run",
+            &importer.trace_backward_on(preview_client, identity).await?,
         )?;
         verify(
             "preview ordinary reads use held connection",
@@ -203,11 +213,11 @@ pub(super) async fn run(
                         Some(first.version),
                     )
                     .await?
-                    == first
-                && format!(
-                    "{:?}",
-                    pe.trace_backward_on(preview_client, manager, 1, identity).await?
-                ) == format!("{trace:?}"),
+                    == first,
+        )?;
+        verify_trace(
+            "preview ordinary trace includes both source lots and the run",
+            &pe.trace_backward_on(preview_client, manager, 1, identity).await?,
         )?;
         refusal(
             "preview ordinary trace denies import-only principal",
@@ -235,12 +245,9 @@ pub(super) async fn run(
                 .await?
                 == first,
         )?;
-        verify(
-            "revalidation preserves imported lot trace",
-            format!(
-                "{:?}",
-                importer.trace_backward_on(tx.sql(), identity).await?
-            ) == format!("{trace:?}"),
+        verify_trace(
+            "revalidation trace includes both source lots and the run",
+            &importer.trace_backward_on(tx.sql(), identity).await?,
         )?;
         Ok::<_, Error>(())
     })
@@ -370,9 +377,9 @@ pub(super) async fn run(
         "archived company preserves import run yield",
         importer.get_run_yield(execution).await?.execution_id == execution,
     )?;
-    verify(
-        "archived company preserves import backward trace",
-        importer.trace_backward(identity).await?.material.root.id == identity,
+    verify_trace(
+        "archived company trace includes both source lots and the run",
+        &importer.trace_backward(identity).await?,
     )?;
     let client = db.get().await?;
     client
