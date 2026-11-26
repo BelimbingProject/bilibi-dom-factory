@@ -284,10 +284,11 @@ gates nothing yet.
 
 ## Sibling callers
 
-`get_item_on`, `get_material_on` and `get_unit_on` read through a caller's
-PostgreSQL client/transaction with the same capability and scope checks as the
-pooled reads. Use them while holding a mutation's company lock; acquiring a
-second connection could exhaust the pool with concurrent writers.
+`get_item_on`, `get_material_on`, `get_unit_on`, `get_conversion_on` and
+`trace_backward_on` read through a caller's PostgreSQL client or transaction
+with the same capability and scope checks as the pooled reads. Use them while
+holding a mutation's company lock, since acquiring a second connection could
+exhaust the pool with concurrent writers.
 `normalize_property_definitions` and `validate_property_values` expose the
 shared property contract through Inventory, without exposing private helpers.
 `get_identity_last_added_on` reads when an identity last received stock, on a
@@ -361,5 +362,3 @@ values. Conversion rows are append-only (UPDATE, DELETE and TRUNCATE are
 refused) and never name the material's native unit. The adopted Belimbing
 defaults for status (`draft`) and currency are not carried: both come from
 the company's settings or the request.
-
-Caller-held transactions can use `get_material_on`, `get_conversion_on` and `trace_backward_on` for the same scoped and authorized ordinary reads without acquiring another connection.

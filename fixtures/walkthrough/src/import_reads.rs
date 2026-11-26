@@ -168,15 +168,7 @@ pub(super) async fn run(
     // a mutation transaction. Nested reads must never acquire another pool slot.
     let expected_material = inventory.get_material(manager, 1, material).await?;
     let deadline = Duration::from_secs(10);
-    let reserve_spare_connections = || async {
-        let mut reserved = Vec::new();
-        for _ in 1..app.db.status().max_size {
-            reserved.push(app.db.get().await?);
-        }
-        Ok::<_, Error>(reserved)
-    };
     timeout(deadline, async {
-        let _reserved = reserve_spare_connections().await?;
         let mut client = app.db.get().await?;
         let preview = client.transaction().await?;
         let preview_client = &*preview;
@@ -222,11 +214,13 @@ pub(super) async fn run(
         )?;
         verify_trace(
             "preview ordinary trace includes both source lots and the run",
-            &pe.trace_backward_on(preview_client, manager, 1, identity).await?,
+            &pe.trace_backward_on(preview_client, manager, 1, identity)
+                .await?,
         )?;
         refusal(
             "preview ordinary trace denies import-only principal",
-            pe.trace_backward_on(preview_client, principal, 1, identity).await,
+            pe.trace_backward_on(preview_client, principal, 1, identity)
+                .await,
             "Access denied",
         )?;
         preview.rollback().await?;
@@ -291,7 +285,6 @@ pub(super) async fn run(
         .services
         .get::<bilibi_database::Db>("base/database.pool")?;
     let foreign_importer = timeout(deadline, async {
-        let _reserved = reserve_spare_connections().await?;
         let client = app.db.get().await?;
         let foreign: i64 = client
             .query_one("SELECT id FROM companies WHERE tenant_id<>1 LIMIT 1", &[])
@@ -433,7 +426,6 @@ pub(super) async fn run(
         )
         .await?;
     timeout(deadline, async {
-        let _reserved = reserve_spare_connections().await?;
         let client = app.db.get().await?;
         refusal(
             "held connection rechecks revoked material grant",
