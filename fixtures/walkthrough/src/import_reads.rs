@@ -2,18 +2,21 @@
 use super::{decimal, refusal, verify, Error};
 use bilibi_authz::grants::Grants;
 use bilibi_factory_inventory::{Inventory, NewUnit};
-use bilibi_factory_production_execution::ProductionExecution;
+use bilibi_factory_production_execution::{ProductionExecution, ProductionTrace, Source};
 use bilibi_tenancy::Scope;
+use std::time::Duration;
+use tokio::time::timeout;
 
 pub(super) async fn run(
     app: &bilibi_web::App,
     admin: &Scope,
     manager: &Scope,
     principal: &Scope,
-    evidence: (i64, i64, i64),
+    evidence: (i64, i64, i64, [i64; 2]),
+    resource_id: i64,
 ) -> Result<(), Error> {
     println!("== import-only material, conversion, yield and backward trace reads");
-    let (material, execution, identity) = evidence;
+    let (material, execution, identity, inputs) = evidence;
     let inventory = app
         .services
         .get::<Inventory>(bilibi_factory_inventory::SERVICE)?;
@@ -132,17 +135,123 @@ pub(super) async fn run(
             .set_direct(admin, manager.user(), capability, None)
             .await?;
     }
+    let verify_trace = |label, trace: &ProductionTrace| {
+        verify(
+            label,
+            trace.material.root.id == identity
+                && trace.runs.iter().any(|run| {
+                    run.id == execution
+                        && run.source == Source::Import
+                        && run.resource.id == resource_id
+                })
+                && inputs.iter().all(|input| {
+                    trace.material.identities.iter().any(|lot| lot.id == *input)
+                        && trace.material.links.iter().any(|link| {
+                            link.input_identity_id == *input && link.output_identity_id == identity
+                        })
+                }),
+        )
+    };
     let trace = importer.trace_backward(identity).await?;
-    verify(
-        "import trace includes source lots and enriched production runs",
-        trace.material.identities.len() > 1
-            && !trace.material.links.is_empty()
-            && trace.runs.iter().any(|run| run.id == execution),
+    verify_trace("import trace includes both source lots and the run", &trace)?;
+    let ordinary_trace = pe.trace_backward(manager, 1, identity).await?;
+    verify_trace(
+        "ordinary trace includes both source lots and the run",
+        &ordinary_trace,
     )?;
     verify(
         "import backward trace matches ordinary genealogy and resources",
-        format!("{trace:?}") == format!("{:?}", pe.trace_backward(manager, 1, identity).await?),
+        format!("{trace:?}") == format!("{ordinary_trace:?}"),
     )?;
+
+    // Exercise the two clients held by reviewed import: a preview transaction and
+    // a mutation transaction. Nested reads must never acquire another pool slot.
+    let expected_material = inventory.get_material(manager, 1, material).await?;
+    let deadline = Duration::from_secs(10);
+    timeout(deadline, async {
+        let mut client = app.db.get().await?;
+        let preview = client.transaction().await?;
+        let preview_client = &*preview;
+        verify(
+            "preview import material uses held connection",
+            importer.get_material_on(preview_client, material).await? == expected_material,
+        )?;
+        verify(
+            "preview import keeps exact conversion",
+            importer
+                .get_conversion_on(preview_client, material, unit.id, first.version)
+                .await?
+                == first,
+        )?;
+        refusal(
+            "preview missing version stays missing",
+            importer
+                .get_conversion_on(preview_client, material, unit.id, second.version + 1)
+                .await,
+            "Conversion not found",
+        )?;
+        verify_trace(
+            "preview import trace includes both source lots and the run",
+            &importer.trace_backward_on(preview_client, identity).await?,
+        )?;
+        verify(
+            "preview ordinary reads use held connection",
+            inventory
+                .get_material_on(preview_client, manager, 1, material)
+                .await?
+                == expected_material
+                && inventory
+                    .get_conversion_on(
+                        preview_client,
+                        manager,
+                        1,
+                        material,
+                        unit.id,
+                        Some(first.version),
+                    )
+                    .await?
+                    == first,
+        )?;
+        verify_trace(
+            "preview ordinary trace includes both source lots and the run",
+            &pe.trace_backward_on(preview_client, manager, 1, identity)
+                .await?,
+        )?;
+        refusal(
+            "preview ordinary trace denies import-only principal",
+            pe.trace_backward_on(preview_client, principal, 1, identity)
+                .await,
+            "Access denied",
+        )?;
+        preview.rollback().await?;
+        let boundary = app
+            .services
+            .get::<bilibi_database::MutationBoundary>("base/database.mutations")?;
+        let tx = boundary
+            .begin(
+                &mut client,
+                principal.mutation_context("walkthrough.import-revalidation"),
+            )
+            .await?;
+        verify(
+            "revalidation import material uses mutation connection",
+            importer.get_material_on(tx.sql(), material).await? == expected_material,
+        )?;
+        verify(
+            "revalidation keeps exact conversion",
+            importer
+                .get_conversion_on(tx.sql(), material, unit.id, first.version)
+                .await?
+                == first,
+        )?;
+        verify_trace(
+            "revalidation trace includes both source lots and the run",
+            &importer.trace_backward_on(tx.sql(), identity).await?,
+        )?;
+        Ok::<_, Error>(())
+    })
+    .await
+    .map_err(|_| "preview or revalidation exceeded the held-connection deadline")??;
 
     refusal(
         "ordinary material read retains configuration view",
@@ -175,12 +284,36 @@ pub(super) async fn run(
     let db = app
         .services
         .get::<bilibi_database::Db>("base/database.pool")?;
-    let client = db.get().await?;
-    let foreign: i64 = client
-        .query_one("SELECT id FROM companies WHERE tenant_id<>1 LIMIT 1", &[])
-        .await?
-        .get(0);
-    let foreign_importer = pe.importer(principal, foreign)?;
+    let foreign_importer = timeout(deadline, async {
+        let client = app.db.get().await?;
+        let foreign: i64 = client
+            .query_one("SELECT id FROM companies WHERE tenant_id<>1 LIMIT 1", &[])
+            .await?
+            .get(0);
+        let foreign_importer = pe.importer(principal, foreign)?;
+        refusal(
+            "held connection refuses foreign material",
+            foreign_importer.get_material_on(&**client, material).await,
+            "Not found",
+        )?;
+        refusal(
+            "held connection refuses foreign conversion",
+            foreign_importer
+                .get_conversion_on(&**client, material, unit.id, first.version)
+                .await,
+            "Not found",
+        )?;
+        refusal(
+            "held connection refuses foreign trace",
+            foreign_importer
+                .trace_backward_on(&**client, identity)
+                .await,
+            "Not found",
+        )?;
+        Ok::<_, Error>(foreign_importer)
+    })
+    .await
+    .map_err(|_| "foreign-company checks exceeded the held-connection deadline")??;
     refusal(
         "material import read refuses a foreign company",
         foreign_importer.get_material(material).await,
@@ -219,12 +352,14 @@ pub(super) async fn run(
         "Identity not found",
     )?;
 
+    let client = db.get().await?;
     client
         .execute(
             "UPDATE companies SET status='archived' WHERE tenant_id=1 AND id=1",
             &[],
         )
         .await?;
+    drop(client);
     verify(
         "archived company preserves import material evidence",
         importer.get_material(material).await?.item_id == material,
@@ -240,16 +375,18 @@ pub(super) async fn run(
         "archived company preserves import run yield",
         importer.get_run_yield(execution).await?.execution_id == execution,
     )?;
-    verify(
-        "archived company preserves import backward trace",
-        importer.trace_backward(identity).await?.material.root.id == identity,
+    verify_trace(
+        "archived company trace includes both source lots and the run",
+        &importer.trace_backward(identity).await?,
     )?;
+    let client = db.get().await?;
     client
         .execute(
             "UPDATE companies SET deleted_at=now() WHERE tenant_id=1 AND id=1",
             &[],
         )
         .await?;
+    drop(client);
     refusal(
         "material import read rechecks live company",
         importer.get_material(material).await,
@@ -272,12 +409,14 @@ pub(super) async fn run(
         importer.trace_backward(identity).await,
         "Not found",
     )?;
+    let client = db.get().await?;
     client
         .execute(
             "UPDATE companies SET status='active', deleted_at=NULL WHERE tenant_id=1 AND id=1",
             &[],
         )
         .await?;
+    drop(client);
     grants
         .set_system(
             admin,
@@ -286,6 +425,29 @@ pub(super) async fn run(
             Some(false),
         )
         .await?;
+    timeout(deadline, async {
+        let client = app.db.get().await?;
+        refusal(
+            "held connection rechecks revoked material grant",
+            importer.get_material_on(&**client, material).await,
+            "Access denied",
+        )?;
+        refusal(
+            "held connection rechecks revoked conversion grant",
+            importer
+                .get_conversion_on(&**client, material, unit.id, first.version)
+                .await,
+            "Access denied",
+        )?;
+        refusal(
+            "held connection rechecks revoked trace grant",
+            importer.trace_backward_on(&**client, identity).await,
+            "Access denied",
+        )?;
+        Ok::<_, Error>(())
+    })
+    .await
+    .map_err(|_| "revoked-grant checks exceeded the held-connection deadline")??;
     refusal(
         "retained importer material read rechecks revoked grant",
         importer.get_material(material).await,

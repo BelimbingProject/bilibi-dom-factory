@@ -492,6 +492,24 @@ impl Inventory {
         .await
     }
 
+    /// Backward trace on the caller's connection, with ordinary read authorization.
+    pub async fn trace_backward_on(
+        &self,
+        client: &(impl tokio_postgres::GenericClient + Sync),
+        scope: &Scope,
+        company_id: i64,
+        identity_id: i64,
+    ) -> Result<Trace> {
+        genealogy::trace(
+            client,
+            scope,
+            company_id,
+            identity_id,
+            genealogy::Direction::Backward,
+        )
+        .await
+    }
+
     /// Follows transform links from a receipt toward descendant outputs.
     pub async fn trace_forward(
         &self,
@@ -979,6 +997,19 @@ impl Inventory {
     ) -> Result<Vec<Conversion>> {
         connection!(self, client);
         conversions::list(client, scope, company_id, item_id).await
+    }
+
+    /// Read a conversion on the caller's connection, with ordinary read authorization.
+    pub async fn get_conversion_on(
+        &self,
+        client: &(impl tokio_postgres::GenericClient + Sync),
+        scope: &Scope,
+        company_id: i64,
+        item_id: i64,
+        unit_id: i64,
+        version: Option<i32>,
+    ) -> Result<Conversion> {
+        conversions::get(client, scope, company_id, item_id, unit_id, version).await
     }
 
     /// An item's conversion from `unit_id`: the current version, or the one

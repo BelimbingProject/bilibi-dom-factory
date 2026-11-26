@@ -38,11 +38,20 @@ impl Importer<'_> {
             .get()
             .await
             .map_err(bilibi_database::Error::from)?;
+        self.get_material_on(&**client, item).await
+    }
+
+    /// Prepare a material on the caller's transaction, rechecking import access.
+    pub async fn get_material_on(
+        &self,
+        client: &(impl tokio_postgres::GenericClient + Sync),
+        item: i64,
+    ) -> Result<Material> {
         Ok(self
             .owner
             .completer
             .inventory
-            .get_import_material_on(&**client, &self.access, item)
+            .get_import_material_on(client, &self.access, item)
             .await?)
     }
 
@@ -55,11 +64,22 @@ impl Importer<'_> {
             .get()
             .await
             .map_err(bilibi_database::Error::from)?;
+        self.get_conversion_on(&**client, item, unit, version).await
+    }
+
+    /// Read the exact conversion version on the caller's transaction.
+    pub async fn get_conversion_on(
+        &self,
+        client: &(impl tokio_postgres::GenericClient + Sync),
+        item: i64,
+        unit: i64,
+        version: i32,
+    ) -> Result<Conversion> {
         Ok(self
             .owner
             .completer
             .inventory
-            .get_import_conversion_on(&**client, &self.access, item, unit, version)
+            .get_import_conversion_on(client, &self.access, item, unit, version)
             .await?)
     }
 
@@ -77,12 +97,27 @@ impl Importer<'_> {
     }
 
     pub async fn trace_backward(&self, identity: i64) -> Result<ProductionTrace> {
+        let client = self
+            .owner
+            .db
+            .get()
+            .await
+            .map_err(bilibi_database::Error::from)?;
+        self.trace_backward_on(&**client, identity).await
+    }
+
+    /// Trace an imported identity on the caller's transaction.
+    pub async fn trace_backward_on(
+        &self,
+        client: &(impl tokio_postgres::GenericClient + Sync),
+        identity: i64,
+    ) -> Result<ProductionTrace> {
         self.owner
-            .production_trace(
+            .production_trace_backward_on(
+                client,
                 self.access.scope(),
                 self.access.company(),
                 identity,
-                false,
                 Some(&self.access),
             )
             .await

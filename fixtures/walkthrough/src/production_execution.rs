@@ -1968,12 +1968,16 @@ async fn main() -> Result<(), Error> {
         audited
             == 2 + addition_posting.entries.len() as i64 + addition_posting.genealogy.len() as i64,
     )?;
+    drop(client);
+    // The import caller holds the only pool slot during each connection check.
+    app.db.resize(1);
     import_reads::run(
         &app,
         &admin,
         &manager,
         &principal,
-        (product_item, imported.id, output_identity),
+        (product_item, imported.id, output_identity, [aged, free_lot]),
+        imported_run.resource_id,
     )
     .await?;
     println!("production execution walkthrough complete");
