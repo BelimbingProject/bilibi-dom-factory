@@ -2,7 +2,7 @@
 use super::{decimal, refusal, verify, Error};
 use bilibi_authz::grants::Grants;
 use bilibi_factory_inventory::{Inventory, NewUnit};
-use bilibi_factory_production_execution::{ProductionExecution, ProductionTrace};
+use bilibi_factory_production_execution::{ProductionExecution, ProductionTrace, Source};
 use bilibi_tenancy::Scope;
 use std::time::Duration;
 use tokio::time::timeout;
@@ -13,6 +13,7 @@ pub(super) async fn run(
     manager: &Scope,
     principal: &Scope,
     evidence: (i64, i64, i64, [i64; 2]),
+    resource_id: i64,
 ) -> Result<(), Error> {
     println!("== import-only material, conversion, yield and backward trace reads");
     let (material, execution, identity, inputs) = evidence;
@@ -138,7 +139,11 @@ pub(super) async fn run(
         verify(
             label,
             trace.material.root.id == identity
-                && trace.runs.iter().any(|run| run.id == execution)
+                && trace.runs.iter().any(|run| {
+                    run.id == execution
+                        && run.source == Source::Import
+                        && run.resource.id == resource_id
+                })
                 && inputs.iter().all(|input| {
                     trace.material.identities.iter().any(|lot| lot.id == *input)
                         && trace.material.links.iter().any(|link| {

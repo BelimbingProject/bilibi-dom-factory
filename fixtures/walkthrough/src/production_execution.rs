@@ -1974,6 +1974,7 @@ async fn main() -> Result<(), Error> {
         &manager,
         &principal,
         (product_item, imported.id, output_identity, [aged, free_lot]),
+        imported_run.resource_id,
     )
     .await?;
     println!("production execution walkthrough complete");
