@@ -79,8 +79,104 @@ impl ProductionExecution {
         company: i64,
         identity: i64,
     ) -> Result<ProductionTrace> {
-        self.production_trace(scope, company, identity, false, None)
+        let client = self.db.get().await.map_err(bilibi_database::Error::from)?;
+        self.trace_backward_on(&**client, scope, company, identity)
             .await
+    }
+
+    /// Backward production trace on the caller's connection.
+    pub async fn trace_backward_on(
+        &self,
+        client: &(impl tokio_postgres::GenericClient + Sync),
+        scope: &Scope,
+        company: i64,
+        identity: i64,
+    ) -> Result<ProductionTrace> {
+        self.production_trace_backward_on(client, scope, company, identity, None)
+            .await
+    }
+
+    pub(crate) async fn production_trace_backward_on(
+        &self,
+        client: &(impl tokio_postgres::GenericClient + Sync),
+        scope: &Scope,
+        company: i64,
+        identity: i64,
+        import: Option<&ProductionImport<'_>>,
+    ) -> Result<ProductionTrace> {
+        let inventory = &self.completer.inventory;
+        let material = if let Some(import) = import {
+            import.authorize_on(client).await?;
+            inventory
+                .trace_import_backward_on(client, import, identity)
+                .await?
+        } else {
+            bilibi_company::authorize_work_target(
+                client,
+                scope,
+                company,
+                crate::contributions::FLOOR_VIEW,
+            )
+            .await?;
+            inventory
+                .trace_backward_on(client, scope, company, identity)
+                .await?
+        };
+        let ids: Vec<i64> = material
+            .identities
+            .iter()
+            .map(|i| i.source_transaction_id)
+            .chain(material.links.iter().map(|l| l.transaction_id))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let sql = format!(
+            "SELECT {} FROM factory_operation_executions WHERE tenant_id=$1 AND company_id=$2 AND inventory_transaction_id=ANY($3) ORDER BY completed_at,id",
+            orders::EXECUTION_COLUMNS
+        );
+        let rows = client
+            .query(&sql, &[&scope.tenant(), &company, &ids])
+            .await?;
+        let executions: Vec<Execution> = rows
+            .iter()
+            .map(|row| Ok(orders::execution(row)?.0))
+            .collect::<Result<_>>()?;
+        let mut resources = BTreeMap::new();
+        let mut runs = Vec::new();
+        for execution in executions {
+            let order = orders::get_order(client, scope, company, execution.order_id).await?;
+            if let std::collections::btree_map::Entry::Vacant(entry) =
+                resources.entry(execution.resource_id)
+            {
+                entry.insert(if let Some(import) = import {
+                    self.product_definition
+                        .get_import_resource_on(client, import, execution.resource_id)
+                        .await?
+                } else {
+                    self.product_definition
+                        .get_resource_on(client, scope, company, execution.resource_id)
+                        .await?
+                });
+            }
+            runs.push(TraceRun {
+                id: execution.id,
+                order: TraceOrder {
+                    id: order.id,
+                    code: order.code,
+                    kind: order.kind,
+                    product_id: order.product_id,
+                    formula_version: order.formula_version,
+                    routing_version: order.routing_version,
+                },
+                operation_code: execution.operation_code,
+                resource: resources[&execution.resource_id].clone(),
+                started_at: execution.started_at,
+                completed_at: execution.completed_at,
+                source: execution.source,
+                inventory_transaction_id: execution.inventory_transaction_id,
+            });
+        }
+        Ok(ProductionTrace { material, runs })
     }
 
     pub async fn trace_forward(

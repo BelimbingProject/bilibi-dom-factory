@@ -361,3 +361,5 @@ values. Conversion rows are append-only (UPDATE, DELETE and TRUNCATE are
 refused) and never name the material's native unit. The adopted Belimbing
 defaults for status (`draft`) and currency are not carried: both come from
 the company's settings or the request.
+
+Caller-held transactions can use `get_material_on`, `get_conversion_on` and `trace_backward_on` for the same scoped and authorized ordinary reads without acquiring another connection.
